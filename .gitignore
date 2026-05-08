@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.turbo/
+.vite/
+.env
+.env.*
+!.env.example
+coverage/
+apps/api/prisma/migrations/*/migration_lock.toml
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+

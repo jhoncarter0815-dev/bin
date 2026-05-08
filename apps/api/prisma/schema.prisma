@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomType {
+  PUBLIC
+  PRIVATE
+  PRACTICE
+}
+
+enum RoomStatus {
+  OPEN
+  COUNTDOWN
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum MatchStatus {
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum SeatStatus {
+  RESERVED
+  ACTIVE
+  FORFEIT
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+  ENTRY_FEE
+  REFUND
+  WIN_PAYOUT
+  ADMIN_ADJUSTMENT
+}
+
+enum PlayerResultStatus {
+  WINNER
+  LOST
+  FORFEIT
+  CANCELLED
+}
+
+model User {
+  id          String        @id @default(cuid())
+  telegramId BigInt        @unique
+  username    String?
+  firstName   String?
+  lastName    String?
+  photoUrl    String?
+  isAdmin     Boolean       @default(false)
+  isBanned    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  wallet      Wallet?
+  seats       Seat[]
+  wins        Match[]       @relation("Winner")
+  results     PlayerResult[]
+  txns        Transaction[]
+  auditLogs   AuditLog[]
+
+  @@index([createdAt])
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  balance   Int      @default(0)
+  locked    Int      @default(0)
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Room {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  type      RoomType
+  status    RoomStatus @default(OPEN)
+  entryFee  Int
+  maxSeats  Int        @default(200)
+  startsAt  DateTime
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  seats     Seat[]
+  match     Match?
+
+  @@index([status, type, startsAt])
+}
+
+model Seat {
+  id         String     @id @default(cuid())
+  roomId     String
+  userId     String
+  seatNumber Int
+  card       Json
+  status     SeatStatus @default(RESERVED)
+  joinedAt   DateTime   @default(now())
+  room       Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, seatNumber])
+  @@unique([roomId, userId])
+  @@index([userId, status])
+}
+
+model Match {
+  id            String       @id @default(cuid())
+  roomId        String       @unique
+  status        MatchStatus  @default(ACTIVE)
+  serverSeed    String
+  seedHash      String
+  seedReveal    String?
+  drawOrder     Json
+  calledNumbers Json
+  currentIndex  Int          @default(0)
+  prizePool     Int          @default(0)
+  pattern       String       @default("ROW,COLUMN,DIAGONAL")
+  winnerSeat    Int?
+  winnerUserId  String?
+  startedAt     DateTime     @default(now())
+  lastDrawAt    DateTime     @default(now())
+  finishedAt    DateTime?
+  updatedAt     DateTime     @updatedAt
+  room          Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  winner        User?        @relation("Winner", fields: [winnerUserId], references: [id])
+  results       PlayerResult[]
+  txns          Transaction[]
+
+  @@index([status, startedAt])
+  @@index([winnerUserId])
+}
+
+model PlayerResult {
+  id         String             @id @default(cuid())
+  matchId    String
+  userId     String
+  seatNumber Int?
+  status     PlayerResultStatus
+  pot        Int                @default(0)
+  createdAt  DateTime           @default(now())
+  match      Match              @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, userId])
+  @@index([userId, createdAt])
+}
+
+model Transaction {
+  id           String          @id @default(cuid())
+  userId       String
+  type         TransactionType
+  amount       Int
+  balanceAfter Int
+  roomId       String?
+  matchId      String?
+  description  String?
+  metadata     Json?
+  createdAt    DateTime        @default(now())
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  match        Match?          @relation(fields: [matchId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([roomId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+}
