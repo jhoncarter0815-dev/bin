@@ -85,6 +85,16 @@ The Mini App includes an Admin tab for quick user inspection.
 
 Each match stores a private server seed and public SHA-256 seed hash. The draw order is generated from that seed. After the match finishes, the API reveals `seedReveal` through `/api/match/:id/fair`, allowing clients to recompute and verify the draw.
 
+## Data Persistence
+
+Users, wallet balances, transactions, seats, rooms, matches, and results are stored in PostgreSQL through Prisma. Restarting the bot/API process does not reset those records as long as `DATABASE_URL` points to the same persistent database.
+
+- In production, use managed PostgreSQL or a database volume with backups enabled.
+- Keep `JWT_SECRET`, `ADMIN_SECRET`, and `TELEGRAM_BOT_TOKEN` stable between restarts.
+- Do not run `prisma migrate reset`, `prisma:dev`, or destructive database commands against production data.
+- `STARTING_CREDITS` only applies when a new user is first created. Existing balances are not recalculated on login or restart.
+- The `/health` endpoint checks database connectivity, and startup logs include persistent record counts.
+
 ## Commands
 
 ```bash
@@ -94,4 +104,3 @@ npm run test
 npm run lint
 npm run seed
 ```
-

@@ -4,9 +4,11 @@ import { prisma } from "./prisma.js";
 import { buildServer } from "./server.js";
 import { registerRealtime } from "./realtime.js";
 import { startGameScheduler } from "./jobs.js";
+import { verifyPersistentStorage } from "./persistence.js";
 
 const app = await buildServer();
 registerRealtime(app, app.server);
+await verifyPersistentStorage(app.log);
 const scheduler = startGameScheduler(app.log);
 
 const shutdown = async () => {

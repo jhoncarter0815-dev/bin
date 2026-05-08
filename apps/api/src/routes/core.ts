@@ -20,7 +20,10 @@ const seatBodySchema = z.object({
 });
 
 export async function registerCoreRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.get("/health", async () => ({ ok: true, service: "telegram-bingo-platform" }));
+  fastify.get("/health", async () => {
+    await prisma.$queryRaw`SELECT 1`;
+    return { ok: true, service: "telegram-bingo-platform", storage: "ready" };
+  });
 
   fastify.get("/api/rooms/current", { preHandler: fastify.authenticate }, async (request) => {
     return getOrCreatePublicRoom(request.user!.id);
@@ -97,4 +100,3 @@ export async function registerCoreRoutes(fastify: FastifyInstance): Promise<void
     return { totalMatches, wins, losses };
   });
 }
-
