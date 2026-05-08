@@ -2,6 +2,8 @@ import {
   Activity,
   BadgeDollarSign,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   Crown,
   Grid3X3,
   History,
@@ -9,16 +11,25 @@ import {
   LogOut,
   Play,
   UserRound,
-  Wallet
+  Wallet,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { MatchDto, MatchResultDto, MatchWinnerDto, RoomDto, TransactionDto, WalletDto } from "@bingo/shared";
-import { BINGO_LETTERS, formatBall, isMarked } from "@bingo/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  MatchDto,
+  MatchResultDto,
+  MatchWinnerDto,
+  RoomDto,
+  TransactionDto,
+  WalletDto,
+} from "@bingo/shared";
+import { BINGO_LETTERS, formatBall, hasBingo, isMarked } from "@bingo/shared";
 import { authenticate, endpoints, type Session } from "./api";
 import { createBingoSocket, type BingoSocket } from "./socket";
 import { haptic, prepareTelegramShell } from "./telegram";
 
 type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
+const AUTO_BINGO_KEY = "bingo_auto_bingo";
+const SEATS_PER_PAGE = 40;
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -28,11 +39,19 @@ export function App() {
   const [wallet, setWallet] = useState<WalletDto>({ balance: 0, locked: 0 });
   const [history, setHistory] = useState<MatchResultDto[]>([]);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
-  const [profile, setProfile] = useState({ totalMatches: 0, wins: 0, losses: 0 });
+  const [profile, setProfile] = useState({
+    totalMatches: 0,
+    wins: 0,
+    losses: 0,
+  });
   const [winnerDialog, setWinnerDialog] = useState<MatchDto | null>(null);
-  const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(null);
+  const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(
+    null,
+  );
+  const [autoBingo, setAutoBingo] = useState(readAutoBingoPreference);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const autoBingoAttempt = useRef<string | null>(null);
 
   useEffect(() => {
     prepareTelegramShell();
@@ -45,7 +64,8 @@ export function App() {
     socket.on("room:state", (nextRoom) => setRoom(nextRoom));
     socket.on("match:state", (nextMatch) => {
       setMatch(nextMatch);
-      if (nextMatch.status === "ACTIVE" || nextMatch.status === "FINISHED") setPage("game");
+      if (nextMatch.status === "ACTIVE" || nextMatch.status === "FINISHED")
+        setPage("game");
     });
     return () => {
       socket.disconnect();
@@ -68,7 +88,8 @@ export function App() {
   }, [session, room?.id, page]);
 
   useEffect(() => {
-    if (!match || match.status !== "FINISHED" || match.winners.length === 0) return;
+    if (!match || match.status !== "FINISHED" || match.winners.length === 0)
+      return;
     if (seenWinnerMatchId === match.id) return;
 
     setSeenWinnerMatchId(match.id);
@@ -76,6 +97,24 @@ export function App() {
     haptic(match.winners.some((winner) => winner.isMine) ? "heavy" : "medium");
     void refreshAccount();
   }, [match?.id, match?.status, match?.winners.length, seenWinnerMatchId]);
+
+  useEffect(() => {
+    if (!autoBingo || !match?.myCard || match.status !== "ACTIVE") return;
+    if (!hasBingo(match.myCard, match.calledNumbers, [match.pattern])) return;
+
+    const attemptKey = `${match.id}:${match.currentIndex}`;
+    if (autoBingoAttempt.current === attemptKey) return;
+    autoBingoAttempt.current = attemptKey;
+    void submitAutoBingo(match.id);
+  }, [
+    autoBingo,
+    match?.id,
+    match?.status,
+    match?.currentIndex,
+    match?.myCard,
+    match?.calledNumbers,
+    match?.pattern,
+  ]);
 
   async function boot() {
     try {
@@ -97,12 +136,13 @@ export function App() {
   }
 
   async function refreshAccount() {
-    const [nextWallet, nextHistory, nextTransactions, nextProfile] = await Promise.all([
-      endpoints.wallet(),
-      endpoints.history(),
-      endpoints.transactions(),
-      endpoints.profile()
-    ]);
+    const [nextWallet, nextHistory, nextTransactions, nextProfile] =
+      await Promise.all([
+        endpoints.wallet(),
+        endpoints.history(),
+        endpoints.transactions(),
+        endpoints.profile(),
+      ]);
     setWallet(nextWallet);
     setHistory(nextHistory);
     setTransactions(nextTransactions);
@@ -156,6 +196,26 @@ export function App() {
     }, "Bingo submitted");
   }
 
+  async function submitAutoBingo(matchId: string) {
+    try {
+      setMessage("");
+      const nextMatch = await endpoints.claimBingo(matchId);
+      setMatch(nextMatch);
+      setWallet(await endpoints.wallet());
+      await refreshAccount();
+      haptic("medium");
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Auto Bingo failed";
+      if (!text.toLowerCase().includes("already finished")) setMessage(text);
+    }
+  }
+
+  function changeAutoBingo(enabled: boolean) {
+    setAutoBingo(enabled);
+    writeAutoBingoPreference(enabled);
+    haptic("light");
+  }
+
   async function exitMatch() {
     if (!match) return;
     await runAction(async () => {
@@ -188,7 +248,11 @@ export function App() {
         </div>
         <div className="brand-copy">
           <strong>Bingo Core</strong>
-          <span>{session?.user.username ? `@${session.user.username}` : "Telegram Mini App"}</span>
+          <span>
+            {session?.user.username
+              ? `@${session.user.username}`
+              : "Telegram Mini App"}
+          </span>
         </div>
         <div className="balance-pill">
           <BadgeDollarSign size={16} />
@@ -198,28 +262,60 @@ export function App() {
 
       <main className="screen">
         {loading && <BootScreen />}
-        {!loading && message && <div className="notice">{message}</div>}
+        {!loading && (
+          <div className="notice-slot">
+            {message && <div className="notice">{message}</div>}
+          </div>
+        )}
         {!loading && page === "home" && (
-          <HomePage wallet={wallet} onPublic={openPublicRoom} onPractice={startPractice} />
+          <HomePage
+            wallet={wallet}
+            onPublic={openPublicRoom}
+            onPractice={startPractice}
+          />
         )}
         {!loading && page === "play" && room && (
-          <PlayPage room={room} activeSeat={activeSeat} onSeat={joinSeat} onLeave={leaveCurrentRoom} />
+          <PlayPage
+            room={room}
+            activeSeat={activeSeat}
+            onSeat={joinSeat}
+            onLeave={leaveCurrentRoom}
+          />
         )}
         {!loading && page === "game" && match && (
-          <GamePage match={match} onBingo={claimBingo} onExit={exitMatch} />
+          <GamePage
+            match={match}
+            autoBingo={autoBingo}
+            onAutoBingoChange={changeAutoBingo}
+            onBingo={claimBingo}
+            onExit={exitMatch}
+          />
         )}
         {!loading && page === "wallet" && (
-          <WalletPage wallet={wallet} transactions={transactions} onRefresh={refreshAccount} />
+          <WalletPage
+            wallet={wallet}
+            transactions={transactions}
+            onRefresh={refreshAccount}
+          />
         )}
         {!loading && page === "history" && (
           <HistoryPage history={history} onRefresh={refreshAccount} />
         )}
         {!loading && page === "profile" && (
-          <ProfilePage profile={profile} wallet={wallet} onRefresh={refreshAccount} />
+          <ProfilePage
+            profile={profile}
+            wallet={wallet}
+            onRefresh={refreshAccount}
+          />
         )}
       </main>
 
-      {winnerDialog && <WinnerModal match={winnerDialog} onClose={() => setWinnerDialog(null)} />}
+      {winnerDialog && (
+        <WinnerModal
+          match={winnerDialog}
+          onClose={() => setWinnerDialog(null)}
+        />
+      )}
 
       <BottomNav
         page={page}
@@ -227,7 +323,8 @@ export function App() {
           if (next === "play") void openPublicRoom();
           else {
             setPage(next);
-            if (["wallet", "history", "profile"].includes(next)) void refreshAccount();
+            if (["wallet", "history", "profile"].includes(next))
+              void refreshAccount();
           }
         }}
       />
@@ -247,7 +344,7 @@ function BootScreen() {
 function HomePage({
   wallet,
   onPublic,
-  onPractice
+  onPractice,
 }: {
   wallet: WalletDto;
   onPublic: () => void;
@@ -299,7 +396,15 @@ function HomePage({
   );
 }
 
-function Metric({ label, value, tone = "cyan" }: { label: string; value: string; tone?: "cyan" | "green" | "gold" }) {
+function Metric({
+  label,
+  value,
+  tone = "cyan",
+}: {
+  label: string;
+  value: string;
+  tone?: "cyan" | "green" | "gold";
+}) {
   return (
     <div className={`metric tone-${tone}`}>
       <strong>{value}</strong>
@@ -312,18 +417,36 @@ function PlayPage({
   room,
   activeSeat,
   onSeat,
-  onLeave
+  onLeave,
 }: {
   room: RoomDto;
   activeSeat?: number;
   onSeat: (seatNumber: number) => void;
   onLeave: () => void;
 }) {
+  const pageCount = Math.max(1, Math.ceil(room.maxSeats / SEATS_PER_PAGE));
+  const [seatPage, setSeatPage] = useState(() =>
+    activeSeat ? Math.floor((activeSeat - 1) / SEATS_PER_PAGE) : 0,
+  );
   const occupied = new Map(room.seats.map((seat) => [seat.seatNumber, seat]));
   const pot = room.seats.length * room.entryFee;
+  const startSeat = seatPage * SEATS_PER_PAGE + 1;
+  const endSeat = Math.min(room.maxSeats, startSeat + SEATS_PER_PAGE - 1);
+  const visibleSeats = Array.from(
+    { length: endSeat - startSeat + 1 },
+    (_, index) => startSeat + index,
+  );
+
+  useEffect(() => {
+    setSeatPage((current) => Math.min(current, pageCount - 1));
+  }, [pageCount]);
+
+  useEffect(() => {
+    if (activeSeat) setSeatPage(Math.floor((activeSeat - 1) / SEATS_PER_PAGE));
+  }, [activeSeat]);
 
   return (
-    <section className="stack">
+    <section className="stack play-stack">
       <div className="panel room-panel">
         <div>
           <p className="eyebrow">Public Room</p>
@@ -337,7 +460,11 @@ function PlayPage({
       </div>
       <div className="compact-stats">
         <Metric label="Entry" value={`${room.entryFee}`} tone="cyan" />
-        <Metric label="Players" value={`${room.seats.length}/${room.maxSeats}`} tone="green" />
+        <Metric
+          label="Players"
+          value={`${room.seats.length}/${room.maxSeats}`}
+          tone="green"
+        />
         <Metric label="Pot" value={`${pot}`} tone="gold" />
       </div>
       <div className="seat-panel">
@@ -355,9 +482,33 @@ function PlayPage({
             Leave
           </button>
         </div>
+        <div className="seat-range">
+          <button
+            className="icon-action"
+            aria-label="Previous seats"
+            title="Previous seats"
+            disabled={seatPage === 0}
+            onClick={() => setSeatPage((current) => Math.max(0, current - 1))}
+          >
+            <ChevronLeft size={17} />
+          </button>
+          <span>
+            {startSeat}-{endSeat}
+          </span>
+          <button
+            className="icon-action"
+            aria-label="Next seats"
+            title="Next seats"
+            disabled={seatPage >= pageCount - 1}
+            onClick={() =>
+              setSeatPage((current) => Math.min(pageCount - 1, current + 1))
+            }
+          >
+            <ChevronRight size={17} />
+          </button>
+        </div>
         <div className="seat-grid" aria-label="Seat grid">
-          {Array.from({ length: room.maxSeats }, (_, index) => {
-            const seatNumber = index + 1;
+          {visibleSeats.map((seatNumber) => {
             const seat = occupied.get(seatNumber);
             const mine = seat?.isMine;
             return (
@@ -366,7 +517,7 @@ function PlayPage({
                 className={`seat ${mine ? "mine" : seat ? "taken" : ""}`}
                 disabled={Boolean(seat && !mine)}
                 onClick={() => onSeat(seatNumber)}
-                title={seat ? seat.username ?? "Taken" : `Seat ${seatNumber}`}
+                title={seat ? (seat.username ?? "Taken") : `Seat ${seatNumber}`}
               >
                 {seatNumber}
               </button>
@@ -380,19 +531,28 @@ function PlayPage({
 
 function GamePage({
   match,
+  autoBingo,
+  onAutoBingoChange,
   onBingo,
-  onExit
+  onExit,
 }: {
   match: MatchDto;
+  autoBingo: boolean;
+  onAutoBingoChange: (enabled: boolean) => void;
   onBingo: () => void;
   onExit: () => void;
 }) {
-  const called = useMemo(() => new Set(match.calledNumbers), [match.calledNumbers]);
+  const called = useMemo(
+    () => new Set(match.calledNumbers),
+    [match.calledNumbers],
+  );
   const current = match.currentNumber ? formatBall(match.currentNumber) : "...";
-  const winnersSummary = match.winners.map((winner) => `Seat ${winner.seatNumber}`).join(", ");
+  const winnersSummary = match.winners
+    .map((winner) => `Seat ${winner.seatNumber}`)
+    .join(", ");
 
   return (
-    <section className="stack">
+    <section className="stack game-stack">
       <div className="panel game-header">
         <div className="game-meta">
           <span>Room {match.roomCode}</span>
@@ -403,54 +563,77 @@ function GamePage({
         <div className="draw-progress">
           <span>{match.currentIndex}</span>
           <div>
-            <i style={{ width: `${Math.min(100, (match.currentIndex / Math.max(1, match.totalNumbers)) * 100)}%` }} />
+            <i
+              style={{
+                width: `${Math.min(100, (match.currentIndex / Math.max(1, match.totalNumbers)) * 100)}%`,
+              }}
+            />
           </div>
           <span>{match.totalNumbers}</span>
         </div>
         <div className="called-strip">
-          {match.calledNumbers.slice(-10).map((value) => (
+          {match.calledNumbers.slice(-5).map((value) => (
             <span key={value}>{formatBall(value)}</span>
           ))}
         </div>
       </div>
 
       {match.myCard && (
-        <div className="bingo-card">
-          {BINGO_LETTERS.map((letter) => (
-            <div className="card-head" key={letter}>
-              {letter}
-            </div>
-          ))}
-          {match.myCard.flat().map((cell) => {
-            const marked = isMarked(cell, called);
-            return (
-              <div className={`card-cell ${marked ? "marked" : ""}`} key={`${cell.row}-${cell.col}`}>
-                {cell.value}
+        <div className="card-zone">
+          <div className="bingo-card">
+            {BINGO_LETTERS.map((letter) => (
+              <div className="card-head" key={letter}>
+                {letter}
               </div>
-            );
-          })}
+            ))}
+            {match.myCard.flat().map((cell) => {
+              const marked = isMarked(cell, called);
+              return (
+                <div
+                  className={`card-cell ${marked ? "marked" : ""}`}
+                  key={`${cell.row}-${cell.col}`}
+                >
+                  {cell.value}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
       {match.status === "ACTIVE" ? (
-        <>
-          <div className="auto-bingo-note">
-            <Crown size={18} />
-            <span>Auto Bingo is watching every card</span>
+        <div className="game-controls">
+          <label className="switch-row">
+            <span>
+              <Crown size={17} />
+              Auto Bingo
+            </span>
+            <input
+              type="checkbox"
+              checked={autoBingo}
+              onChange={(event) =>
+                onAutoBingoChange(event.currentTarget.checked)
+              }
+            />
+            <i aria-hidden="true" />
+          </label>
+          <div className="game-actions">
+            <button className="text-action center" onClick={onBingo}>
+              <Crown size={18} />
+              Check
+            </button>
+            <button className="danger-action compact" onClick={onExit}>
+              <LogOut size={17} />
+              Exit
+            </button>
           </div>
-          <button className="text-action center" onClick={onBingo}>
-            <Crown size={18} />
-            Manual Check
-          </button>
-          <button className="danger-action" onClick={onExit}>
-            <LogOut size={17} />
-            Exit Match
-          </button>
-        </>
+        </div>
       ) : (
         <div className="result-strip">
           <Crown size={18} />
-          <span>{winnersSummary ? `Winner: ${winnersSummary}` : "Match finished"}</span>
+          <span>
+            {winnersSummary ? `Winner: ${winnersSummary}` : "Match finished"}
+          </span>
         </div>
       )}
     </section>
@@ -460,7 +643,7 @@ function GamePage({
 function WalletPage({
   wallet,
   transactions,
-  onRefresh
+  onRefresh,
 }: {
   wallet: WalletDto;
   transactions: TransactionDto[];
@@ -471,7 +654,7 @@ function WalletPage({
   }, []);
 
   return (
-    <section className="stack">
+    <section className="stack data-stack">
       <div className="panel wallet-panel">
         <p className="eyebrow">Wallet</p>
         <h1>{wallet.balance} CR</h1>
@@ -488,13 +671,19 @@ function WalletPage({
   );
 }
 
-function HistoryPage({ history, onRefresh }: { history: MatchResultDto[]; onRefresh: () => void }) {
+function HistoryPage({
+  history,
+  onRefresh,
+}: {
+  history: MatchResultDto[];
+  onRefresh: () => void;
+}) {
   useEffect(() => {
     void onRefresh();
   }, []);
 
   return (
-    <section className="stack">
+    <section className="stack data-stack">
       <h2 className="section-title">Match Logs</h2>
       <ListEmpty items={history} text="No matches finished yet." />
       {history.map((item) => (
@@ -512,7 +701,7 @@ function HistoryPage({ history, onRefresh }: { history: MatchResultDto[]; onRefr
 function ProfilePage({
   profile,
   wallet,
-  onRefresh
+  onRefresh,
 }: {
   profile: { totalMatches: number; wins: number; losses: number };
   wallet: WalletDto;
@@ -523,7 +712,7 @@ function ProfilePage({
   }, []);
 
   return (
-    <section className="stack">
+    <section className="stack data-stack">
       <div className="profile-grid">
         <Metric label="Matches" value={`${profile.totalMatches}`} />
         <Metric label="Wins" value={`${profile.wins}`} />
@@ -539,19 +728,35 @@ function ListEmpty<T>({ items, text }: { items: T[]; text: string }) {
   return <div className="empty-state">{text}</div>;
 }
 
-function WinnerModal({ match, onClose }: { match: MatchDto; onClose: () => void }) {
+function WinnerModal({
+  match,
+  onClose,
+}: {
+  match: MatchDto;
+  onClose: () => void;
+}) {
   const split = match.winners.length > 1;
   const myWin = match.winners.some((winner) => winner.isMine);
-  const totalPaid = match.winners.reduce((sum, winner) => sum + winner.prize, 0);
+  const totalPaid = match.winners.reduce(
+    (sum, winner) => sum + winner.prize,
+    0,
+  );
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="winner-title">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="winner-title"
+    >
       <div className="winner-modal">
         <div className="winner-crown">
           <Crown size={30} />
         </div>
         <p className="eyebrow">Room {match.roomCode}</p>
-        <h2 id="winner-title">{myWin ? "You Won!" : split ? "Split Bingo!" : "Bingo!"}</h2>
+        <h2 id="winner-title">
+          {myWin ? "You Won!" : split ? "Split Bingo!" : "Bingo!"}
+        </h2>
         <p className="winner-copy">
           {split
             ? `${match.prizePool} credits split between ${match.winners.length} winners.`
@@ -559,7 +764,10 @@ function WinnerModal({ match, onClose }: { match: MatchDto; onClose: () => void 
         </p>
         <div className="winner-list">
           {match.winners.map((winner) => (
-            <div className={winner.isMine ? "winner-row mine" : "winner-row"} key={winner.userId}>
+            <div
+              className={winner.isMine ? "winner-row mine" : "winner-row"}
+              key={winner.userId}
+            >
               <div>
                 <strong>{displayWinnerName(winner)}</strong>
                 <span>Seat {winner.seatNumber}</span>
@@ -579,22 +787,49 @@ function WinnerModal({ match, onClose }: { match: MatchDto; onClose: () => void 
 function displayWinnerName(winner: MatchWinnerDto): string {
   return winner.username
     ? `@${winner.username}`
-    : [winner.firstName, winner.lastName].filter(Boolean).join(" ") || `Player ${winner.userId.slice(0, 6)}`;
+    : [winner.firstName, winner.lastName].filter(Boolean).join(" ") ||
+        `Player ${winner.userId.slice(0, 6)}`;
 }
 
 function formatWinnerSeats(item: MatchResultDto): string {
-  const seats = item.winnerSeats?.length ? item.winnerSeats : item.winnerSeat ? [item.winnerSeat] : [];
+  const seats = item.winnerSeats?.length
+    ? item.winnerSeats
+    : item.winnerSeat
+      ? [item.winnerSeat]
+      : [];
   if (seats.length === 0) return "Winner none";
   return `Winner ${seats.map((seat) => `Seat ${seat}`).join(", ")}`;
 }
 
-function BottomNav({ page, setPage }: { page: Page; setPage: (page: Page) => void }) {
+function readAutoBingoPreference(): boolean {
+  try {
+    return localStorage.getItem(AUTO_BINGO_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function writeAutoBingoPreference(enabled: boolean): void {
+  try {
+    localStorage.setItem(AUTO_BINGO_KEY, String(enabled));
+  } catch {
+    // Local storage can be unavailable in strict embedded browser modes.
+  }
+}
+
+function BottomNav({
+  page,
+  setPage,
+}: {
+  page: Page;
+  setPage: (page: Page) => void;
+}) {
   const items: Array<{ page: Page; label: string; icon: typeof Home }> = [
     { page: "home", label: "Home", icon: Home },
     { page: "play", label: "Play", icon: Play },
     { page: "wallet", label: "Wallet", icon: Wallet },
     { page: "history", label: "Logs", icon: History },
-    { page: "profile", label: "User", icon: UserRound }
+    { page: "profile", label: "User", icon: UserRound },
   ];
 
   return (
