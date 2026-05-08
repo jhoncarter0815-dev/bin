@@ -8,7 +8,6 @@ import {
   Home,
   LogOut,
   Play,
-  Shield,
   UserRound,
   Wallet
 } from "lucide-react";
@@ -19,7 +18,7 @@ import { authenticate, endpoints, type Session } from "./api";
 import { createBingoSocket, type BingoSocket } from "./socket";
 import { haptic, prepareTelegramShell } from "./telegram";
 
-type Page = "home" | "play" | "game" | "wallet" | "history" | "profile" | "admin";
+type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -30,10 +29,6 @@ export function App() {
   const [history, setHistory] = useState<MatchResultDto[]>([]);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
   const [profile, setProfile] = useState({ totalMatches: 0, wins: 0, losses: 0 });
-  const [adminSecret, setAdminSecret] = useState(localStorage.getItem("admin_secret") ?? "");
-  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; username?: string | null; wallet?: WalletDto | null }>>(
-    []
-  );
   const [winnerDialog, setWinnerDialog] = useState<MatchDto | null>(null);
   const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -171,13 +166,6 @@ export function App() {
     }, "Match exited");
   }
 
-  async function loadAdminUsers() {
-    await runAction(async () => {
-      localStorage.setItem("admin_secret", adminSecret);
-      setAdminUsers(await endpoints.adminUsers(adminSecret));
-    });
-  }
-
   async function runAction(action: () => Promise<void>, success?: string) {
     try {
       setMessage("");
@@ -229,14 +217,6 @@ export function App() {
         {!loading && page === "profile" && (
           <ProfilePage profile={profile} wallet={wallet} onRefresh={refreshAccount} />
         )}
-        {!loading && page === "admin" && (
-          <AdminPage
-            secret={adminSecret}
-            setSecret={setAdminSecret}
-            users={adminUsers}
-            onLoad={loadAdminUsers}
-          />
-        )}
       </main>
 
       {winnerDialog && <WinnerModal match={winnerDialog} onClose={() => setWinnerDialog(null)} />}
@@ -281,33 +261,47 @@ function HomePage({
           <div className="ball small">15</div>
           <div className="ball gold">G</div>
         </div>
-        <p className="eyebrow">Live Room Protocol</p>
-        <h1>Play Bingo. Win Credits.</h1>
+        <div className="hero-copy">
+          <p className="eyebrow">Live Table</p>
+          <h1>Bingo Core</h1>
+          <div className="hero-balance">
+            <span>Ready Balance</span>
+            <strong>{wallet.balance} CR</strong>
+          </div>
+        </div>
         <div className="metric-grid">
-          <Metric label="Entry" value="50" />
-          <Metric label="Seats" value="200" />
-          <Metric label="Timer" value="30s" />
+          <Metric label="Entry" value="50" tone="cyan" />
+          <Metric label="Seats" value="200" tone="green" />
+          <Metric label="Launch" value="30s" tone="gold" />
         </div>
       </div>
-      <button className="primary-action" onClick={onPublic}>
-        <Play size={18} />
-        Join Public Room
-      </button>
-      <button className="secondary-action" onClick={onPractice}>
-        <Bot size={18} />
-        Practice Table
-      </button>
-      <div className="wallet-strip">
-        <Wallet size={18} />
-        <span>{wallet.balance} credits ready</span>
+      <div className="home-actions">
+        <button className="primary-action" onClick={onPublic}>
+          <Play size={18} />
+          Public Room
+        </button>
+        <button className="secondary-action" onClick={onPractice}>
+          <Bot size={18} />
+          Practice
+        </button>
+      </div>
+      <div className="home-mini-grid">
+        <div className="mini-panel">
+          <span>Wallet</span>
+          <strong>{wallet.balance} CR</strong>
+        </div>
+        <div className="mini-panel">
+          <span>Status</span>
+          <strong>Online</strong>
+        </div>
       </div>
     </section>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, tone = "cyan" }: { label: string; value: string; tone?: "cyan" | "green" | "gold" }) {
   return (
-    <div className="metric">
+    <div className={`metric tone-${tone}`}>
       <strong>{value}</strong>
       <span>{label}</span>
     </div>
@@ -332,8 +326,9 @@ function PlayPage({
     <section className="stack">
       <div className="panel room-panel">
         <div>
-          <p className="eyebrow">Room {room.code}</p>
-          <h2>{activeSeat ? `Seat ${activeSeat} locked` : "Choose a Seat"}</h2>
+          <p className="eyebrow">Public Room</p>
+          <h2>{activeSeat ? `Seat ${activeSeat}` : "Pick Your Seat"}</h2>
+          <div className="room-code">{room.code}</div>
         </div>
         <div className="timer-tile">
           <strong>{room.secondsRemaining}s</strong>
@@ -341,31 +336,43 @@ function PlayPage({
         </div>
       </div>
       <div className="compact-stats">
-        <Metric label="Entry" value={`${room.entryFee}`} />
-        <Metric label="Players" value={`${room.seats.length}/${room.maxSeats}`} />
-        <Metric label="Pot" value={`${pot}`} />
+        <Metric label="Entry" value={`${room.entryFee}`} tone="cyan" />
+        <Metric label="Players" value={`${room.seats.length}/${room.maxSeats}`} tone="green" />
+        <Metric label="Pot" value={`${pot}`} tone="gold" />
       </div>
-      <button className="danger-action" onClick={onLeave}>
-        <LogOut size={17} />
-        Leave Room
-      </button>
-      <div className="seat-grid" aria-label="Seat grid">
-        {Array.from({ length: room.maxSeats }, (_, index) => {
-          const seatNumber = index + 1;
-          const seat = occupied.get(seatNumber);
-          const mine = seat?.isMine;
-          return (
-            <button
-              key={seatNumber}
-              className={`seat ${mine ? "mine" : seat ? "taken" : ""}`}
-              disabled={Boolean(seat && !mine)}
-              onClick={() => onSeat(seatNumber)}
-              title={seat ? seat.username ?? "Taken" : `Seat ${seatNumber}`}
-            >
-              {seatNumber}
-            </button>
-          );
-        })}
+      <div className="seat-panel">
+        <div className="seat-panel-head">
+          <div className="seat-legend">
+            <span className="legend-dot available" />
+            <span>Open</span>
+            <span className="legend-dot taken" />
+            <span>Taken</span>
+            <span className="legend-dot mine" />
+            <span>You</span>
+          </div>
+          <button className="text-action danger" onClick={onLeave}>
+            <LogOut size={15} />
+            Leave
+          </button>
+        </div>
+        <div className="seat-grid" aria-label="Seat grid">
+          {Array.from({ length: room.maxSeats }, (_, index) => {
+            const seatNumber = index + 1;
+            const seat = occupied.get(seatNumber);
+            const mine = seat?.isMine;
+            return (
+              <button
+                key={seatNumber}
+                className={`seat ${mine ? "mine" : seat ? "taken" : ""}`}
+                disabled={Boolean(seat && !mine)}
+                onClick={() => onSeat(seatNumber)}
+                title={seat ? seat.username ?? "Taken" : `Seat ${seatNumber}`}
+              >
+                {seatNumber}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -391,8 +398,15 @@ function GamePage({
           <span>Room {match.roomCode}</span>
           <span>Seat {match.mySeat ?? "N/A"}</span>
         </div>
-        <p>Current Number</p>
+        <p>{match.status === "ACTIVE" ? "Current Number" : "Final Number"}</p>
         <h1>{current}</h1>
+        <div className="draw-progress">
+          <span>{match.currentIndex}</span>
+          <div>
+            <i style={{ width: `${Math.min(100, (match.currentIndex / Math.max(1, match.totalNumbers)) * 100)}%` }} />
+          </div>
+          <span>{match.totalNumbers}</span>
+        </div>
         <div className="called-strip">
           {match.calledNumbers.slice(-10).map((value) => (
             <span key={value}>{formatBall(value)}</span>
@@ -424,7 +438,7 @@ function GamePage({
             <Crown size={18} />
             <span>Auto Bingo is watching every card</span>
           </div>
-          <button className="secondary-action" onClick={onBingo}>
+          <button className="text-action center" onClick={onBingo}>
             <Crown size={18} />
             Manual Check
           </button>
@@ -520,43 +534,6 @@ function ProfilePage({
   );
 }
 
-function AdminPage({
-  secret,
-  setSecret,
-  users,
-  onLoad
-}: {
-  secret: string;
-  setSecret: (value: string) => void;
-  users: Array<{ id: string; username?: string | null; wallet?: WalletDto | null }>;
-  onLoad: () => void;
-}) {
-  return (
-    <section className="stack">
-      <div className="panel">
-        <p className="eyebrow">Admin</p>
-        <input
-          className="text-input"
-          placeholder="ADMIN_SECRET"
-          value={secret}
-          onChange={(event) => setSecret(event.target.value)}
-          type="password"
-        />
-        <button className="secondary-action compact" onClick={onLoad}>
-          <Shield size={17} />
-          Load Users
-        </button>
-      </div>
-      {users.map((user) => (
-        <div className="list-row" key={user.id}>
-          <strong>{user.username ?? user.id.slice(0, 8)}</strong>
-          <span>{user.wallet?.balance ?? 0} CR</span>
-        </div>
-      ))}
-    </section>
-  );
-}
-
 function ListEmpty<T>({ items, text }: { items: T[]; text: string }) {
   if (items.length > 0) return null;
   return <div className="empty-state">{text}</div>;
@@ -617,8 +594,7 @@ function BottomNav({ page, setPage }: { page: Page; setPage: (page: Page) => voi
     { page: "play", label: "Play", icon: Play },
     { page: "wallet", label: "Wallet", icon: Wallet },
     { page: "history", label: "Logs", icon: History },
-    { page: "profile", label: "User", icon: UserRound },
-    { page: "admin", label: "Admin", icon: Shield }
+    { page: "profile", label: "User", icon: UserRound }
   ];
 
   return (

@@ -88,19 +88,6 @@ export const endpoints = {
       wins: number;
       losses: number;
     }>("/api/profile"),
-  adminUsers: (secret: string) =>
-    api<
-      Array<{
-        id: string;
-        telegramId: string;
-        username?: string | null;
-        firstName?: string | null;
-        wallet?: WalletDto | null;
-        createdAt: string;
-      }>
-    >("/api/admin/users", {
-      headers: { "x-admin-secret": secret }
-    })
 };
 
 type ApiInit = Omit<RequestInit, "body"> & {
