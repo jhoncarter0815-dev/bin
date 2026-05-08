@@ -56,6 +56,16 @@ export type RoomDto = {
 
 export type MatchStatus = "ACTIVE" | "FINISHED" | "CANCELLED";
 
+export type MatchWinnerDto = {
+  userId: string;
+  username?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  seatNumber: number;
+  prize: number;
+  isMine?: boolean;
+};
+
 export type MatchDto = {
   id: string;
   roomId: string;
@@ -74,6 +84,7 @@ export type MatchDto = {
   myCard?: BingoCard;
   winnerSeat?: number | null;
   winnerUserId?: string | null;
+  winners: MatchWinnerDto[];
 };
 
 export type MatchResultDto = {
@@ -83,6 +94,7 @@ export type MatchResultDto = {
   status: "WINNER" | "LOST" | "FORFEIT" | "CANCELLED";
   seatNumber?: number | null;
   winnerSeat?: number | null;
+  winnerSeats?: number[];
   pot: number;
   createdAt: string;
 };
@@ -95,4 +107,3 @@ export type TransactionDto = {
   createdAt: string;
   description?: string | null;
 };
-

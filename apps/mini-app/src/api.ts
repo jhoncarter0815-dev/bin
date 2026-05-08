@@ -77,6 +77,7 @@ export const endpoints = {
       drawOrder: number[];
       calledNumbers: number[];
       winnerSeat?: number | null;
+      winnerSeats?: number[];
     }>(`/api/match/${matchId}/fair`),
   history: () => api<MatchResultDto[]>("/api/matches/history"),
   wallet: () => api<WalletDto>("/api/wallet"),
@@ -135,4 +136,3 @@ function ensureDevUserId(): number {
   localStorage.setItem(DEV_USER_KEY, String(value));
   return value;
 }
-

@@ -17,7 +17,9 @@ const roomInclude = {
     include: {
       user: {
         select: {
-          username: true
+          username: true,
+          firstName: true,
+          lastName: true
         }
       }
     }
@@ -27,8 +29,22 @@ const roomInclude = {
 const matchInclude = {
   room: {
     include: roomInclude
+  },
+  results: {
+    include: {
+      user: {
+        select: {
+          username: true,
+          firstName: true,
+          lastName: true
+        }
+      }
+    }
   }
 } satisfies Prisma.MatchInclude;
+
+type MatchWithSeats = Prisma.MatchGetPayload<{ include: typeof matchInclude }>;
+type WinnerSeat = MatchWithSeats["room"]["seats"][number];
 
 export async function getOrCreatePublicRoom(userId?: string) {
   const existing = await prisma.room.findFirst({
@@ -222,15 +238,7 @@ export async function claimBingo(matchId: string, userId: string) {
     async (tx) => {
       const match = await tx.match.findUnique({
         where: { id: matchId },
-        include: {
-          room: {
-            include: {
-              seats: {
-                include: { user: { select: { username: true } } }
-              }
-            }
-          }
-        }
+        include: matchInclude
       });
       if (!match) throw new NotFoundError("Match not found");
       if (match.status !== "ACTIVE") throw new ConflictError("Match is already finished");
@@ -239,54 +247,12 @@ export async function claimBingo(matchId: string, userId: string) {
       if (!seat) throw new ForbiddenError("You are not seated in this match");
       if (seat.status === "FORFEIT") throw new ForbiddenError("Forfeited seats cannot claim bingo");
 
-      const card = parseCard(seat.card);
-      const calledNumbers = parseNumberArray(match.calledNumbers);
-      if (!hasBingo(card, calledNumbers, parsePattern(match.pattern))) {
+      const winners = findWinningSeats(match);
+      if (!winners.some((winner) => winner.userId === userId)) {
         throw new AppError("That card does not have bingo yet", 422, "INVALID_BINGO");
       }
 
-      await tx.match.update({
-        where: { id: match.id },
-        data: {
-          status: "FINISHED",
-          winnerSeat: seat.seatNumber,
-          winnerUserId: userId,
-          seedReveal: match.serverSeed,
-          finishedAt: new Date()
-        }
-      });
-
-      await tx.room.update({
-        where: { id: match.roomId },
-        data: { status: "FINISHED" }
-      });
-
-      await tx.playerResult.createMany({
-        data: match.room.seats.map((item) => ({
-          matchId: match.id,
-          userId: item.userId,
-          seatNumber: item.seatNumber,
-          status: item.userId === userId ? "WINNER" : item.status === "FORFEIT" ? "FORFEIT" : "LOST",
-          pot: item.userId === userId ? match.prizePool : 0
-        })),
-        skipDuplicates: true
-      });
-
-      if (match.prizePool > 0) {
-        await creditWallet(tx, {
-          userId,
-          amount: match.prizePool,
-          type: "WIN_PAYOUT",
-          roomId: match.roomId,
-          matchId: match.id,
-          description: `Bingo payout for room ${match.room.code}`
-        });
-      }
-
-      return tx.match.findUniqueOrThrow({
-        where: { id: match.id },
-        include: matchInclude
-      });
+      return finishMatchWithWinners(tx, match, winners);
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );
@@ -373,26 +339,129 @@ export async function drawDueMatches() {
   let drawn = 0;
   for (const match of matches) {
     const drawOrder = parseNumberArray(match.drawOrder);
-    const calledNumbers = parseNumberArray(match.calledNumbers);
 
     if (match.currentIndex >= drawOrder.length) {
       await finishWithoutWinner(match.id);
       continue;
     }
 
-    const nextNumber = drawOrder[match.currentIndex]!;
-    await prisma.match.update({
-      where: { id: match.id },
-      data: {
-        calledNumbers: [...calledNumbers, nextNumber],
-        currentIndex: { increment: 1 },
-        lastDrawAt: new Date()
-      }
-    });
-    await broadcastMatch(match.id);
-    drawn += 1;
+    const updated = await prisma.$transaction(
+      async (tx) => {
+        const activeMatch = await tx.match.findUnique({
+          where: { id: match.id },
+          include: matchInclude
+        });
+        if (!activeMatch || activeMatch.status !== "ACTIVE") return null;
+
+        const activeDrawOrder = parseNumberArray(activeMatch.drawOrder);
+        const calledNumbers = parseNumberArray(activeMatch.calledNumbers);
+        if (activeMatch.currentIndex >= activeDrawOrder.length) return null;
+
+        const nextNumber = activeDrawOrder[activeMatch.currentIndex]!;
+        const drawnMatch = await tx.match.update({
+          where: { id: activeMatch.id },
+          data: {
+            calledNumbers: [...calledNumbers, nextNumber],
+            currentIndex: { increment: 1 },
+            lastDrawAt: new Date()
+          },
+          include: matchInclude
+        });
+
+        const winners = findWinningSeats(drawnMatch);
+        if (winners.length === 0) return drawnMatch;
+
+        return finishMatchWithWinners(tx, drawnMatch, winners);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    );
+
+    if (updated) {
+      await broadcastMatch(updated.id);
+      if (updated.status === "FINISHED") await broadcastRoom(updated.roomId);
+      drawn += 1;
+    }
   }
   return drawn;
+}
+
+async function finishMatchWithWinners(
+  tx: Prisma.TransactionClient,
+  match: MatchWithSeats,
+  winners: WinnerSeat[]
+) {
+  if (winners.length === 0) throw new AppError("Cannot finish match without winners");
+
+  const sortedWinners = [...winners].sort((a, b) => a.seatNumber - b.seatNumber);
+  const payouts = splitPrizePool(match.prizePool, sortedWinners.length);
+  const payoutByUserId = new Map(sortedWinners.map((winner, index) => [winner.userId, payouts[index] ?? 0]));
+  const firstWinner = sortedWinners[0]!;
+
+  await tx.match.update({
+    where: { id: match.id },
+    data: {
+      status: "FINISHED",
+      winnerSeat: firstWinner.seatNumber,
+      winnerUserId: firstWinner.userId,
+      seedReveal: match.serverSeed,
+      finishedAt: new Date()
+    }
+  });
+
+  await tx.room.update({
+    where: { id: match.roomId },
+    data: { status: "FINISHED" }
+  });
+
+  await tx.playerResult.createMany({
+    data: match.room.seats.map((seat) => {
+      const isWinner = payoutByUserId.has(seat.userId);
+      const pot = payoutByUserId.get(seat.userId) ?? 0;
+      return {
+        matchId: match.id,
+        userId: seat.userId,
+        seatNumber: seat.seatNumber,
+        status: isWinner ? "WINNER" : seat.status === "FORFEIT" ? "FORFEIT" : "LOST",
+        pot
+      };
+    }),
+    skipDuplicates: true
+  });
+
+  for (const winner of sortedWinners) {
+    const amount = payoutByUserId.get(winner.userId) ?? 0;
+    if (amount <= 0) continue;
+    await creditWallet(tx, {
+      userId: winner.userId,
+      amount,
+      type: "WIN_PAYOUT",
+      roomId: match.roomId,
+      matchId: match.id,
+      description: `Bingo payout for room ${match.room.code}`
+    });
+  }
+
+  return tx.match.findUniqueOrThrow({
+    where: { id: match.id },
+    include: matchInclude
+  });
+}
+
+function findWinningSeats(match: MatchWithSeats): WinnerSeat[] {
+  const calledNumbers = parseNumberArray(match.calledNumbers);
+  const patterns = parsePattern(match.pattern);
+
+  return match.room.seats
+    .filter((seat) => seat.status !== "FORFEIT")
+    .filter((seat) => hasBingo(parseCard(seat.card), calledNumbers, patterns))
+    .sort((a, b) => a.seatNumber - b.seatNumber);
+}
+
+function splitPrizePool(prizePool: number, winnerCount: number): number[] {
+  if (winnerCount <= 0) return [];
+  const basePrize = Math.floor(prizePool / winnerCount);
+  const remainder = prizePool % winnerCount;
+  return Array.from({ length: winnerCount }, (_, index) => basePrize + (index < remainder ? 1 : 0));
 }
 
 export async function getHistory(userId: string) {
@@ -403,7 +472,13 @@ export async function getHistory(userId: string) {
     include: {
       match: {
         include: {
-          room: { select: { code: true } }
+          room: { select: { code: true } },
+          results: {
+            select: {
+              status: true,
+              seatNumber: true
+            }
+          }
         }
       }
     }
@@ -420,7 +495,13 @@ export async function getFairProof(matchId: string) {
       seedReveal: true,
       drawOrder: true,
       calledNumbers: true,
-      winnerSeat: true
+      winnerSeat: true,
+      results: {
+        select: {
+          status: true,
+          seatNumber: true
+        }
+      }
     }
   });
   if (!match) throw new NotFoundError("Match not found");
@@ -430,7 +511,11 @@ export async function getFairProof(matchId: string) {
     seedReveal: match.seedReveal,
     drawOrder: parseNumberArray(match.drawOrder),
     calledNumbers: parseNumberArray(match.calledNumbers),
-    winnerSeat: match.winnerSeat
+    winnerSeat: match.winnerSeat,
+    winnerSeats: match.results
+      .filter((result) => result.status === "WINNER" && typeof result.seatNumber === "number")
+      .map((result) => result.seatNumber!)
+      .sort((a, b) => a - b)
   };
 }
 

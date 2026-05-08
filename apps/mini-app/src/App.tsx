@@ -13,7 +13,7 @@ import {
   Wallet
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { MatchDto, MatchResultDto, RoomDto, TransactionDto, WalletDto } from "@bingo/shared";
+import type { MatchDto, MatchResultDto, MatchWinnerDto, RoomDto, TransactionDto, WalletDto } from "@bingo/shared";
 import { BINGO_LETTERS, formatBall, isMarked } from "@bingo/shared";
 import { authenticate, endpoints, type Session } from "./api";
 import { createBingoSocket, type BingoSocket } from "./socket";
@@ -34,6 +34,8 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<Array<{ id: string; username?: string | null; wallet?: WalletDto | null }>>(
     []
   );
+  const [winnerDialog, setWinnerDialog] = useState<MatchDto | null>(null);
+  const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -48,7 +50,7 @@ export function App() {
     socket.on("room:state", (nextRoom) => setRoom(nextRoom));
     socket.on("match:state", (nextMatch) => {
       setMatch(nextMatch);
-      if (nextMatch.status === "ACTIVE") setPage("game");
+      if (nextMatch.status === "ACTIVE" || nextMatch.status === "FINISHED") setPage("game");
     });
     return () => {
       socket.disconnect();
@@ -69,6 +71,16 @@ export function App() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [session, room?.id, page]);
+
+  useEffect(() => {
+    if (!match || match.status !== "FINISHED" || match.winners.length === 0) return;
+    if (seenWinnerMatchId === match.id) return;
+
+    setSeenWinnerMatchId(match.id);
+    setWinnerDialog(match);
+    haptic(match.winners.some((winner) => winner.isMine) ? "heavy" : "medium");
+    void refreshAccount();
+  }, [match?.id, match?.status, match?.winners.length, seenWinnerMatchId]);
 
   async function boot() {
     try {
@@ -227,6 +239,8 @@ export function App() {
         )}
       </main>
 
+      {winnerDialog && <WinnerModal match={winnerDialog} onClose={() => setWinnerDialog(null)} />}
+
       <BottomNav
         page={page}
         setPage={(next) => {
@@ -368,6 +382,7 @@ function GamePage({
 }) {
   const called = useMemo(() => new Set(match.calledNumbers), [match.calledNumbers]);
   const current = match.currentNumber ? formatBall(match.currentNumber) : "...";
+  const winnersSummary = match.winners.map((winner) => `Seat ${winner.seatNumber}`).join(", ");
 
   return (
     <section className="stack">
@@ -403,14 +418,27 @@ function GamePage({
         </div>
       )}
 
-      <button className="win-action" onClick={onBingo}>
-        <Crown size={19} />
-        Bingo
-      </button>
-      <button className="danger-action" onClick={onExit}>
-        <LogOut size={17} />
-        Exit Match
-      </button>
+      {match.status === "ACTIVE" ? (
+        <>
+          <div className="auto-bingo-note">
+            <Crown size={18} />
+            <span>Auto Bingo is watching every card</span>
+          </div>
+          <button className="secondary-action" onClick={onBingo}>
+            <Crown size={18} />
+            Manual Check
+          </button>
+          <button className="danger-action" onClick={onExit}>
+            <LogOut size={17} />
+            Exit Match
+          </button>
+        </>
+      ) : (
+        <div className="result-strip">
+          <Crown size={18} />
+          <span>{winnersSummary ? `Winner: ${winnersSummary}` : "Match finished"}</span>
+        </div>
+      )}
     </section>
   );
 }
@@ -460,7 +488,7 @@ function HistoryPage({ history, onRefresh }: { history: MatchResultDto[]; onRefr
           <strong>
             {item.status} {item.seatNumber ? `Seat ${item.seatNumber}` : ""}
           </strong>
-          <span>Winner {item.winnerSeat ? `Seat ${item.winnerSeat}` : "none"}</span>
+          <span>{formatWinnerSeats(item)}</span>
         </div>
       ))}
     </section>
@@ -532,6 +560,55 @@ function AdminPage({
 function ListEmpty<T>({ items, text }: { items: T[]; text: string }) {
   if (items.length > 0) return null;
   return <div className="empty-state">{text}</div>;
+}
+
+function WinnerModal({ match, onClose }: { match: MatchDto; onClose: () => void }) {
+  const split = match.winners.length > 1;
+  const myWin = match.winners.some((winner) => winner.isMine);
+  const totalPaid = match.winners.reduce((sum, winner) => sum + winner.prize, 0);
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="winner-title">
+      <div className="winner-modal">
+        <div className="winner-crown">
+          <Crown size={30} />
+        </div>
+        <p className="eyebrow">Room {match.roomCode}</p>
+        <h2 id="winner-title">{myWin ? "You Won!" : split ? "Split Bingo!" : "Bingo!"}</h2>
+        <p className="winner-copy">
+          {split
+            ? `${match.prizePool} credits split between ${match.winners.length} winners.`
+            : `${totalPaid} credits paid to the winning seat.`}
+        </p>
+        <div className="winner-list">
+          {match.winners.map((winner) => (
+            <div className={winner.isMine ? "winner-row mine" : "winner-row"} key={winner.userId}>
+              <div>
+                <strong>{displayWinnerName(winner)}</strong>
+                <span>Seat {winner.seatNumber}</span>
+              </div>
+              <b>{winner.prize} CR</b>
+            </div>
+          ))}
+        </div>
+        <button className="primary-action" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function displayWinnerName(winner: MatchWinnerDto): string {
+  return winner.username
+    ? `@${winner.username}`
+    : [winner.firstName, winner.lastName].filter(Boolean).join(" ") || `Player ${winner.userId.slice(0, 6)}`;
+}
+
+function formatWinnerSeats(item: MatchResultDto): string {
+  const seats = item.winnerSeats?.length ? item.winnerSeats : item.winnerSeat ? [item.winnerSeat] : [];
+  if (seats.length === 0) return "Winner none";
+  return `Winner ${seats.map((seat) => `Seat ${seat}`).join(", ")}`;
 }
 
 function BottomNav({ page, setPage }: { page: Page; setPage: (page: Page) => void }) {
