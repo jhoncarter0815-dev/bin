@@ -134,6 +134,12 @@ button {
   padding: 0.9rem 0.85rem 1rem;
 }
 
+.game-screen {
+  display: grid;
+  overflow: hidden;
+  padding: clamp(0.45rem, 1.4dvh, 0.72rem) 0.85rem;
+}
+
 .stack,
 .home-stack {
   display: grid;
@@ -468,9 +474,18 @@ button {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+.game-screen .game-stack {
+  height: 100%;
+  gap: clamp(0.42rem, 1.15dvh, 0.7rem);
+}
+
 .room-panel,
 .game-header {
   padding: 1rem;
+}
+
+.game-screen .game-header {
+  padding: clamp(0.55rem, 1.45dvh, 0.82rem);
 }
 
 .game-header {
@@ -619,12 +634,22 @@ button {
   text-transform: uppercase;
 }
 
+.game-screen .game-header p {
+  margin-top: 0.38rem;
+  font-size: 0.6rem;
+}
+
 .game-header h1 {
   margin-top: 0.2rem;
   color: var(--yellow);
   font-size: clamp(3.6rem, 23vw, 6.2rem);
   line-height: 1;
   text-align: center;
+}
+
+.game-screen .game-header h1 {
+  margin-top: 0.05rem;
+  font-size: clamp(2.9rem, 12.5dvh, 5.2rem);
 }
 
 .draw-progress {
@@ -636,6 +661,11 @@ button {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 900;
+}
+
+.game-screen .draw-progress {
+  gap: 0.45rem;
+  margin-top: 0.16rem;
 }
 
 .draw-progress div {
@@ -661,6 +691,13 @@ button {
   margin-top: 0.7rem;
 }
 
+.game-screen .called-strip {
+  flex-wrap: nowrap;
+  min-height: 1.42rem;
+  margin-top: 0.45rem;
+  overflow: hidden;
+}
+
 .called-strip span {
   padding: 0.32rem 0.48rem;
   border-radius: 999px;
@@ -668,6 +705,11 @@ button {
   background: rgba(100, 228, 239, 0.1);
   font-size: 0.7rem;
   font-weight: 900;
+}
+
+.game-screen .called-strip span {
+  padding: 0.24rem 0.42rem;
+  font-size: 0.62rem;
 }
 
 .card-zone {
@@ -692,6 +734,19 @@ button {
     var(--panel-strong);
 }
 
+.game-screen .bingo-card {
+  grid-template-rows: minmax(1.35rem, 0.34fr) repeat(5, minmax(0, 1fr));
+  width: auto;
+  height: 100%;
+  max-height: 100%;
+  max-width: min(31rem, 100%);
+  aspect-ratio: 5 / 5.65;
+  align-self: center;
+  justify-self: center;
+  gap: clamp(0.24rem, 0.9dvh, 0.38rem);
+  padding: clamp(0.38rem, 1dvh, 0.52rem);
+}
+
 .card-head,
 .card-cell {
   display: grid;
@@ -701,11 +756,22 @@ button {
   font-weight: 950;
 }
 
+.game-screen .card-head,
+.game-screen .card-cell {
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
 .card-head {
   aspect-ratio: auto;
   min-height: 1.8rem;
   color: var(--cyan);
   background: rgba(100, 228, 239, 0.1);
+}
+
+.game-screen .card-head {
+  min-height: 0;
+  font-size: clamp(0.74rem, 2.4dvh, 1rem);
 }
 
 .card-cell {
@@ -720,6 +786,10 @@ button {
     border-color 0.14s ease,
     background 0.14s ease,
     color 0.14s ease;
+}
+
+.game-screen .card-cell {
+  font-size: clamp(0.82rem, 3dvh, 1.18rem);
 }
 
 .card-cell:disabled {
@@ -819,6 +889,11 @@ button {
   text-transform: uppercase;
 }
 
+.game-screen .switch-row {
+  min-height: clamp(2.05rem, 5dvh, 2.38rem);
+  padding: 0.34rem 0.46rem 0.34rem 0.68rem;
+}
+
 .switch-row span {
   display: inline-flex;
   align-items: center;
@@ -911,6 +986,11 @@ button {
   border-radius: 0.85rem;
   background: rgba(155, 168, 255, 0.08);
   text-transform: uppercase;
+}
+
+.game-screen .text-action.center,
+.game-screen .danger-action.compact {
+  min-height: clamp(2.22rem, 5dvh, 2.5rem);
 }
 
 .text-action:disabled {

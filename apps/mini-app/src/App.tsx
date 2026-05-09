@@ -291,7 +291,7 @@ export function App() {
         </div>
       </header>
 
-      <main className="screen">
+      <main className={page === "game" ? "screen game-screen" : "screen"}>
         {loading && <BootScreen />}
         {!loading && message && <div className="notice">{message}</div>}
         {!loading && page === "home" && (
