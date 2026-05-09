@@ -2,7 +2,9 @@ import "dotenv/config";
 import { z } from "zod";
 
 const schema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(8080),
   DATABASE_URL: z.string().min(1),
@@ -10,10 +12,30 @@ const schema = z.object({
   ADMIN_SECRET: z.string().min(16),
   TELEGRAM_BOT_TOKEN: z.string().min(8),
   TELEGRAM_BOT_USERNAME: z.string().optional().default(""),
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional().or(z.literal("")).default(""),
+  TELEGRAM_ANNOUNCE_CHAT_ID: z
+    .string()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
+  TELEGRAM_WEBHOOK_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
   PUBLIC_APP_URL: z.string().url().optional().or(z.literal("")).default(""),
-  MINI_APP_DEV_URL: z.string().url().optional().or(z.literal("")).default("http://localhost:5173"),
-  API_URL: z.string().url().optional().or(z.literal("")).default("http://localhost:8080"),
+  MINI_APP_DEV_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(""))
+    .default("http://localhost:5173"),
+  API_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(""))
+    .default("http://localhost:8080"),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
   ALLOW_DEV_LOGIN: z
     .string()
@@ -22,7 +44,8 @@ const schema = z.object({
   PUBLIC_ROOM_SECONDS: z.coerce.number().int().positive().default(30),
   DRAW_INTERVAL_MS: z.coerce.number().int().positive().default(2500),
   PUBLIC_ENTRY_FEE: z.coerce.number().int().nonnegative().default(50),
-  STARTING_CREDITS: z.coerce.number().int().nonnegative().default(1000)
+  STARTING_CREDITS: z.coerce.number().int().nonnegative().default(1000),
+  REFERRAL_REWARD_CREDITS: z.coerce.number().int().nonnegative().default(100),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -38,7 +61,7 @@ export const env = {
   ...parsed.data,
   CORS_ORIGINS: parsed.data.CORS_ORIGINS.split(",")
     .map((origin) => origin.trim())
-    .filter(Boolean)
+    .filter(Boolean),
 };
 
 export function miniAppUrl(): string {

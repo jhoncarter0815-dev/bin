@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { BINGO_MAX_BALL } from "@bingo/shared";
 import { z } from "zod";
+import { env } from "../config.js";
+import { ForbiddenError, NotFoundError } from "../errors.js";
 import {
   claimBingo,
   forfeitActiveMatch,
@@ -120,6 +122,64 @@ export async function registerCoreRoutes(
   );
 
   fastify.get(
+    "/api/match/:id/audit",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const match = await prisma.match.findUnique({
+        where: { id: params.id },
+        include: {
+          room: {
+            include: {
+              seats: { select: { userId: true } },
+            },
+          },
+        },
+      });
+      if (!match) throw new NotFoundError("Match not found");
+      const seated = match.room.seats.some(
+        (seat) => seat.userId === request.user!.id,
+      );
+      if (!seated && !request.user!.isAdmin)
+        throw new ForbiddenError("You are not seated in this match");
+
+      const logs = await prisma.auditLog.findMany({
+        where: {
+          action: {
+            in: [
+              "ROOM_CREATED",
+              "SEAT_JOINED",
+              "SEAT_FORFEITED",
+              "MATCH_STARTED",
+              "BALL_DRAWN",
+              "BINGO_CLAIMED",
+              "MANUAL_BINGO_CLAIMED",
+              "MATCH_FINISHED",
+              "MATCH_FINISHED_NO_WINNER",
+              "ANNOUNCEMENT_MATCH_STARTED",
+              "ANNOUNCEMENT_MATCH_FINISHED",
+            ],
+          },
+          OR: [
+            { target: `match:${match.id}` },
+            { target: `room:${match.roomId}` },
+          ],
+        },
+        orderBy: { createdAt: "asc" },
+        take: 250,
+      });
+
+      return logs.map((log) => ({
+        id: log.id,
+        action: log.action,
+        target: log.target,
+        metadata: log.metadata,
+        createdAt: log.createdAt.toISOString(),
+      }));
+    },
+  );
+
+  fastify.get(
     "/api/matches/history",
     { preHandler: fastify.authenticate },
     async (request) => {
@@ -165,7 +225,39 @@ export async function registerCoreRoutes(
         }),
       ]);
 
-      return { totalMatches, wins, losses };
+      const [user, referralCount, referralRewards] = await Promise.all([
+        prisma.user.findUniqueOrThrow({
+          where: { id: request.user!.id },
+          select: { referralCode: true },
+        }),
+        prisma.referral.count({ where: { referrerId: request.user!.id } }),
+        prisma.transaction.aggregate({
+          where: {
+            userId: request.user!.id,
+            type: "REFERRAL_BONUS",
+          },
+          _sum: { amount: true },
+        }),
+      ]);
+
+      return {
+        totalMatches,
+        wins,
+        losses,
+        referralCode: user.referralCode,
+        referralCount,
+        referralRewards: referralRewards._sum.amount ?? 0,
+        referralLink: user.referralCode
+          ? referralLink(user.referralCode)
+          : undefined,
+      };
     },
   );
+}
+
+function referralLink(referralCode: string): string {
+  if (env.TELEGRAM_BOT_USERNAME) {
+    return `https://t.me/${env.TELEGRAM_BOT_USERNAME.replace(/^@/, "")}?start=ref_${referralCode}`;
+  }
+  return `${env.PUBLIC_APP_URL || env.MINI_APP_DEV_URL}?ref=${encodeURIComponent(referralCode)}`;
 }

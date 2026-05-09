@@ -23,6 +23,7 @@ export type PublicUser = {
   firstName?: string | null;
   lastName?: string | null;
   photoUrl?: string | null;
+  referralCode?: string | null;
 };
 
 export type WalletDto = {
@@ -40,7 +41,12 @@ export type SeatDto = {
   isMine?: boolean;
 };
 
-export type RoomStatus = "OPEN" | "COUNTDOWN" | "ACTIVE" | "FINISHED" | "CANCELLED";
+export type RoomStatus =
+  | "OPEN"
+  | "COUNTDOWN"
+  | "ACTIVE"
+  | "FINISHED"
+  | "CANCELLED";
 
 export type RoomDto = {
   id: string;

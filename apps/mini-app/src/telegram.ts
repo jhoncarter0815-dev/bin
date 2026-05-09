@@ -1,5 +1,8 @@
 export type TelegramWebApp = {
   initData: string;
+  initDataUnsafe?: {
+    start_param?: string;
+  };
   colorScheme?: "light" | "dark";
   viewportHeight?: number;
   viewportStableHeight?: number;
@@ -46,6 +49,17 @@ export function prepareTelegramShell(): void {
 
 export function getInitData(): string {
   return getTelegramApp()?.initData ?? "";
+}
+
+export function getReferralCode(): string | undefined {
+  const urlParams = new URLSearchParams(window.location.search);
+  return (
+    urlParams.get("ref") ??
+    urlParams.get("startapp") ??
+    getTelegramApp()?.initDataUnsafe?.start_param ??
+    new URLSearchParams(getInitData()).get("start_param") ??
+    undefined
+  );
 }
 
 export function haptic(type: "light" | "medium" | "heavy" = "light"): void {

@@ -6,7 +6,7 @@ import type {
   TransactionDto,
   WalletDto,
 } from "@bingo/shared";
-import { getInitData } from "./telegram";
+import { getInitData, getReferralCode } from "./telegram";
 
 const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const TOKEN_KEY = "bingo_auth_token";
@@ -19,6 +19,24 @@ export type Session = {
   isAdmin?: boolean;
 };
 
+export type FairProofDto = {
+  matchId: string;
+  seedHash: string;
+  seedReveal?: string | null;
+  drawOrder: number[];
+  calledNumbers: number[];
+  winnerSeat?: number | null;
+  winnerSeats?: number[];
+};
+
+export type AuditEntryDto = {
+  id: string;
+  action: string;
+  target?: string | null;
+  metadata?: unknown;
+  createdAt: string;
+};
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -29,11 +47,14 @@ export function setToken(token: string): void {
 
 export async function authenticate(): Promise<Session> {
   const initData = getInitData();
+  const referralCode = getReferralCode();
   const devUserId = ensureDevUserId();
   const session = await request<Session>("/api/auth/telegram", {
     method: "POST",
     auth: false,
-    body: initData ? { initData } : { dev: true, devUser: { id: devUserId } },
+    body: initData
+      ? { initData, referralCode }
+      : { dev: true, referralCode, devUser: { id: devUserId } },
   });
   setToken(session.token);
   return session;
@@ -70,16 +91,9 @@ export const endpoints = {
     api<{ ok: true }>(`/api/match/${matchId}/exit`, {
       method: "POST",
     }),
-  fair: (matchId: string) =>
-    api<{
-      matchId: string;
-      seedHash: string;
-      seedReveal?: string | null;
-      drawOrder: number[];
-      calledNumbers: number[];
-      winnerSeat?: number | null;
-      winnerSeats?: number[];
-    }>(`/api/match/${matchId}/fair`),
+  fair: (matchId: string) => api<FairProofDto>(`/api/match/${matchId}/fair`),
+  audit: (matchId: string) =>
+    api<AuditEntryDto[]>(`/api/match/${matchId}/audit`),
   history: () => api<MatchResultDto[]>("/api/matches/history"),
   wallet: () => api<WalletDto>("/api/wallet"),
   transactions: () => api<TransactionDto[]>("/api/transactions"),
@@ -88,6 +102,10 @@ export const endpoints = {
       totalMatches: number;
       wins: number;
       losses: number;
+      referralCode?: string | null;
+      referralCount: number;
+      referralRewards: number;
+      referralLink?: string;
     }>("/api/profile"),
 };
 

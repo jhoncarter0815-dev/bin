@@ -70,6 +70,7 @@ export function toPublicUser(user: {
   firstName: string | null;
   lastName: string | null;
   photoUrl: string | null;
+  referralCode?: string | null;
 }): PublicUser {
   return {
     id: user.id,
@@ -77,7 +78,8 @@ export function toPublicUser(user: {
     username: user.username,
     firstName: user.firstName,
     lastName: user.lastName,
-    photoUrl: user.photoUrl
+    photoUrl: user.photoUrl,
+    referralCode: user.referralCode
   };
 }
 

@@ -11,7 +11,18 @@ import {
 } from "../errors.js";
 import { prisma } from "../prisma.js";
 import { emitMatch, emitRoom, emitUser } from "../realtime.js";
-import { creditWallet, debitWallet } from "../services/wallet.js";
+import {
+  announceMatchFinished,
+  announceMatchStarted,
+  announceRoomReady,
+} from "../services/announcements.js";
+import { logAudit, matchTarget, roomTarget } from "../services/audit.js";
+import {
+  captureEntryFee,
+  creditWallet,
+  lockEntryFee,
+  refundEntryFee,
+} from "../services/wallet.js";
 import {
   toMatchDto,
   toResultDto,
@@ -86,6 +97,18 @@ export async function getOrCreatePublicRoom(userId?: string) {
     include: roomInclude,
   });
 
+  await logAudit(prisma, {
+    action: "ROOM_CREATED",
+    target: roomTarget(room.id),
+    metadata: {
+      code: room.code,
+      type: room.type,
+      entryFee: room.entryFee,
+      maxSeats: room.maxSeats,
+      startsAt: room.startsAt.toISOString(),
+    },
+  });
+
   return toRoomDto(room, userId);
 }
 
@@ -132,12 +155,12 @@ export async function joinSeat(
       }
 
       if (room.entryFee > 0) {
-        await debitWallet(tx, {
+        await lockEntryFee(tx, {
           userId,
           amount: room.entryFee,
-          type: "ENTRY_FEE",
           roomId,
-          description: `Entry fee for room ${room.code}`,
+          description: `Entry fee locked for room ${room.code}`,
+          metadata: { seatNumber },
         });
       }
 
@@ -148,6 +171,17 @@ export async function joinSeat(
           userId,
           seatNumber,
           card: card as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      await logAudit(tx, {
+        actorId: userId,
+        action: "SEAT_JOINED",
+        target: roomTarget(roomId),
+        metadata: {
+          seatNumber,
+          entryFee: room.entryFee,
+          cardHash: hashJson(card),
         },
       });
 
@@ -162,6 +196,7 @@ export async function joinSeat(
   );
 
   await broadcastRoom(roomId, userId);
+  void announceRoomReady(roomId);
   return getRoom(roomId, userId);
 }
 
@@ -179,14 +214,23 @@ export async function leaveRoom(roomId: string, userId: string) {
 
       await tx.seat.delete({ where: { id: seat.id } });
       if (seat.room.entryFee > 0) {
-        await creditWallet(tx, {
+        await refundEntryFee(tx, {
           userId,
           amount: seat.room.entryFee,
-          type: "REFUND",
           roomId,
           description: `Refund for leaving room ${seat.room.code}`,
         });
       }
+
+      await logAudit(tx, {
+        actorId: userId,
+        action: "SEAT_LEFT",
+        target: roomTarget(roomId),
+        metadata: {
+          seatNumber: seat.seatNumber,
+          entryFee: seat.room.entryFee,
+        },
+      });
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
@@ -291,6 +335,22 @@ export async function claimBingo(
         );
       }
 
+      await logAudit(tx, {
+        actorId: userId,
+        action: options.markedNumbers
+          ? "MANUAL_BINGO_CLAIMED"
+          : "BINGO_CLAIMED",
+        target: matchTarget(match.id),
+        metadata: {
+          seatNumber: seat.seatNumber,
+          currentIndex: match.currentIndex,
+          calledCount: parseNumberArray(match.calledNumbers).length,
+          markedNumbers: options.markedNumbers
+            ? [...new Set(options.markedNumbers)].sort((a, b) => a - b)
+            : undefined,
+        },
+      });
+
       return finishMatchWithWinners(tx, match, winners);
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -298,6 +358,7 @@ export async function claimBingo(
 
   await broadcastMatch(result.id);
   await broadcastRoom(result.roomId);
+  void announceMatchFinished(result.id);
   return toMatchDto(result, userId);
 }
 
@@ -310,21 +371,30 @@ export async function forfeitActiveMatch(matchId: string, userId: string) {
   const seat = match.room.seats.find((item) => item.userId === userId);
   if (!seat) return;
 
-  await prisma.seat.update({
-    where: { id: seat.id },
-    data: { status: "FORFEIT" },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.seat.update({
+      where: { id: seat.id },
+      data: { status: "FORFEIT" },
+    });
 
-  await prisma.playerResult.upsert({
-    where: { matchId_userId: { matchId, userId } },
-    create: {
-      matchId,
-      userId,
-      seatNumber: seat.seatNumber,
-      status: "FORFEIT",
-      pot: 0,
-    },
-    update: { status: "FORFEIT" },
+    await tx.playerResult.upsert({
+      where: { matchId_userId: { matchId, userId } },
+      create: {
+        matchId,
+        userId,
+        seatNumber: seat.seatNumber,
+        status: "FORFEIT",
+        pot: 0,
+      },
+      update: { status: "FORFEIT" },
+    });
+
+    await logAudit(tx, {
+      actorId: userId,
+      action: "SEAT_FORFEITED",
+      target: matchTarget(matchId),
+      metadata: { seatNumber: seat.seatNumber },
+    });
   });
 
   await broadcastMatch(matchId);
@@ -408,6 +478,16 @@ export async function drawDueMatches() {
           include: matchInclude,
         });
 
+        await logAudit(tx, {
+          action: "BALL_DRAWN",
+          target: matchTarget(activeMatch.id),
+          metadata: {
+            number: nextNumber,
+            index: activeMatch.currentIndex + 1,
+            calledCount: calledNumbers.length + 1,
+          },
+        });
+
         const winners = findWinningSeats(drawnMatch);
         if (winners.length === 0) return drawnMatch;
 
@@ -418,7 +498,10 @@ export async function drawDueMatches() {
 
     if (updated) {
       await broadcastMatch(updated.id);
-      if (updated.status === "FINISHED") await broadcastRoom(updated.roomId);
+      if (updated.status === "FINISHED") {
+        await broadcastRoom(updated.roomId);
+        void announceMatchFinished(updated.id);
+      }
       drawn += 1;
     }
   }
@@ -489,6 +572,22 @@ async function finishMatchWithWinners(
       description: `Bingo payout for room ${match.room.code}`,
     });
   }
+
+  await logAudit(tx, {
+    action: "MATCH_FINISHED",
+    target: matchTarget(match.id),
+    metadata: {
+      roomId: match.roomId,
+      roomCode: match.room.code,
+      prizePool: match.prizePool,
+      winnerSeats: sortedWinners.map((winner) => winner.seatNumber),
+      payouts: sortedWinners.map((winner) => ({
+        seatNumber: winner.seatNumber,
+        amount: payoutByUserId.get(winner.userId) ?? 0,
+      })),
+      calledCount: parseNumberArray(match.calledNumbers).length,
+    },
+  });
 
   return tx.match.findUniqueOrThrow({
     where: { id: match.id },
@@ -614,7 +713,8 @@ async function startRoom(room: Room & { seats: Seat[] }) {
         where: { id: room.id },
         include: { seats: true },
       });
-      if (!activeRoom || activeRoom.status === "ACTIVE") return null;
+      if (!activeRoom || !["OPEN", "COUNTDOWN"].includes(activeRoom.status))
+        return null;
 
       await tx.seat.updateMany({
         where: { roomId: room.id },
@@ -625,17 +725,41 @@ async function startRoom(room: Room & { seats: Seat[] }) {
         data: { status: "ACTIVE" },
       });
 
-      return tx.match.create({
+      for (const seat of activeRoom.seats) {
+        await captureEntryFee(tx, {
+          userId: seat.userId,
+          amount: activeRoom.entryFee,
+          roomId: activeRoom.id,
+        });
+      }
+
+      const match = await tx.match.create({
         data: {
           roomId: room.id,
           serverSeed: fair.seed,
           seedHash: fair.seedHash,
           drawOrder: fair.drawOrder as Prisma.InputJsonValue,
           calledNumbers: [],
-          prizePool: activeRoom.seats.length * room.entryFee,
+          prizePool: activeRoom.seats.length * activeRoom.entryFee,
         },
         include: matchInclude,
       });
+
+      await logAudit(tx, {
+        action: "MATCH_STARTED",
+        target: matchTarget(match.id),
+        metadata: {
+          roomId: room.id,
+          roomCode: activeRoom.code,
+          playerCount: activeRoom.seats.length,
+          prizePool: match.prizePool,
+          seedHash: fair.seedHash,
+          drawOrderHash: hashJson(fair.drawOrder),
+          pattern: match.pattern,
+        },
+      });
+
+      return match;
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
@@ -643,6 +767,7 @@ async function startRoom(room: Room & { seats: Seat[] }) {
   if (match) {
     await broadcastRoom(room.id);
     await broadcastMatch(match.id);
+    void announceMatchStarted(match.id);
   }
 }
 
@@ -653,34 +778,49 @@ async function finishWithoutWinner(matchId: string) {
   });
   if (!existing) return;
 
-  const match = await prisma.match.update({
-    where: { id: matchId },
-    data: {
-      status: "FINISHED",
-      seedReveal: existing.serverSeed,
-      finishedAt: new Date(),
-    },
-    include: matchInclude,
-  });
+  const match = await prisma.$transaction(async (tx) => {
+    const finished = await tx.match.update({
+      where: { id: matchId },
+      data: {
+        status: "FINISHED",
+        seedReveal: existing.serverSeed,
+        finishedAt: new Date(),
+      },
+      include: matchInclude,
+    });
 
-  await prisma.room.update({
-    where: { id: match.roomId },
-    data: { status: "FINISHED" },
-  });
+    await tx.room.update({
+      where: { id: finished.roomId },
+      data: { status: "FINISHED" },
+    });
 
-  await prisma.playerResult.createMany({
-    data: match.room.seats.map((seat) => ({
-      matchId,
-      userId: seat.userId,
-      seatNumber: seat.seatNumber,
-      status: seat.status === "FORFEIT" ? "FORFEIT" : "LOST",
-      pot: 0,
-    })),
-    skipDuplicates: true,
+    await tx.playerResult.createMany({
+      data: finished.room.seats.map((seat) => ({
+        matchId,
+        userId: seat.userId,
+        seatNumber: seat.seatNumber,
+        status: seat.status === "FORFEIT" ? "FORFEIT" : "LOST",
+        pot: 0,
+      })),
+      skipDuplicates: true,
+    });
+
+    await logAudit(tx, {
+      action: "MATCH_FINISHED_NO_WINNER",
+      target: matchTarget(matchId),
+      metadata: {
+        roomId: finished.roomId,
+        roomCode: finished.room.code,
+        calledCount: parseNumberArray(finished.calledNumbers).length,
+      },
+    });
+
+    return finished;
   });
 
   await broadcastMatch(matchId);
   await broadcastRoom(match.roomId);
+  void announceMatchFinished(matchId);
 }
 
 async function ensurePracticeBots() {
@@ -728,4 +868,11 @@ async function broadcastMatch(matchId: string) {
 
 function secureRandomSource() {
   return () => crypto.randomInt(0, 1_000_000_000) / 1_000_000_000;
+}
+
+function hashJson(value: unknown): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex");
 }

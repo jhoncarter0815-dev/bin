@@ -8,6 +8,7 @@ import {
   Home,
   LogOut,
   Play,
+  Share2,
   UserRound,
   Wallet,
 } from "lucide-react";
@@ -27,7 +28,13 @@ import {
   hasBingo,
   isMarked,
 } from "@bingo/shared";
-import { authenticate, endpoints, type Session } from "./api";
+import {
+  authenticate,
+  endpoints,
+  type AuditEntryDto,
+  type FairProofDto,
+  type Session,
+} from "./api";
 import { createBingoSocket, type BingoSocket } from "./socket";
 import { haptic, prepareTelegramShell } from "./telegram";
 
@@ -35,6 +42,19 @@ type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
 const AUTO_BINGO_KEY = "bingo_auto_bingo";
 const MANUAL_MARKS_KEY = "bingo_manual_marks";
 type ManualMarksByMatch = Record<string, number[]>;
+type ProfileState = {
+  totalMatches: number;
+  wins: number;
+  losses: number;
+  referralCode?: string | null;
+  referralCount: number;
+  referralRewards: number;
+  referralLink?: string;
+};
+type ProofState = {
+  fair: FairProofDto;
+  audit: AuditEntryDto[];
+};
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -44,12 +64,17 @@ export function App() {
   const [wallet, setWallet] = useState<WalletDto>({ balance: 0, locked: 0 });
   const [history, setHistory] = useState<MatchResultDto[]>([]);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
-  const [profile, setProfile] = useState({
+  const [profile, setProfile] = useState<ProfileState>({
     totalMatches: 0,
     wins: 0,
     losses: 0,
+    referralCode: null,
+    referralCount: 0,
+    referralRewards: 0,
+    referralLink: undefined,
   });
   const [winnerDialog, setWinnerDialog] = useState<MatchDto | null>(null);
+  const [proofDialog, setProofDialog] = useState<ProofState | null>(null);
   const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(
     null,
   );
@@ -169,6 +194,18 @@ export function App() {
     });
   }
 
+  async function joinNextRoom() {
+    setWinnerDialog(null);
+    setProofDialog(null);
+    await runAction(async () => {
+      const nextRoom = await endpoints.currentRoom();
+      setRoom(nextRoom);
+      setMatch(null);
+      setPage("play");
+      setWallet(await endpoints.wallet());
+    }, "Next room ready");
+  }
+
   async function joinSeat(seatNumber: number) {
     if (!room) return;
     await runAction(async () => {
@@ -256,6 +293,33 @@ export function App() {
     }, "Match exited");
   }
 
+  async function shareReferral() {
+    const link = profile.referralLink;
+    if (!link) return;
+
+    await runAction(async () => {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Bingo Core",
+          text: "Join me on Bingo Core.",
+          url: link,
+        });
+        return;
+      }
+      await navigator.clipboard.writeText(link);
+    }, "Invite link ready");
+  }
+
+  async function openProof(matchId: string) {
+    await runAction(async () => {
+      const [fair, audit] = await Promise.all([
+        endpoints.fair(matchId),
+        endpoints.audit(matchId),
+      ]);
+      setProofDialog({ fair, audit });
+    });
+  }
+
   async function runAction(action: () => Promise<void>, success?: string) {
     try {
       setMessage("");
@@ -318,6 +382,8 @@ export function App() {
             onManualMark={toggleManualMark}
             onBingo={claimBingo}
             onExit={exitMatch}
+            onNextRoom={joinNextRoom}
+            onProof={() => openProof(match.id)}
           />
         )}
         {!loading && page === "wallet" && (
@@ -335,6 +401,7 @@ export function App() {
             profile={profile}
             wallet={wallet}
             onRefresh={refreshAccount}
+            onInvite={shareReferral}
           />
         )}
       </main>
@@ -343,6 +410,16 @@ export function App() {
         <WinnerModal
           match={winnerDialog}
           onClose={() => setWinnerDialog(null)}
+          onNextRoom={joinNextRoom}
+          onProof={() => openProof(winnerDialog.id)}
+        />
+      )}
+
+      {proofDialog && (
+        <ProofModal
+          proof={proofDialog.fair}
+          audit={proofDialog.audit}
+          onClose={() => setProofDialog(null)}
         />
       )}
 
@@ -524,6 +601,8 @@ function GamePage({
   onManualMark,
   onBingo,
   onExit,
+  onNextRoom,
+  onProof,
 }: {
   match: MatchDto;
   autoBingo: boolean;
@@ -532,6 +611,8 @@ function GamePage({
   onManualMark: (value: number) => void;
   onBingo: () => void;
   onExit: () => void;
+  onNextRoom: () => void;
+  onProof: () => void;
 }) {
   const called = useMemo(
     () => new Set(match.calledNumbers),
@@ -666,11 +747,21 @@ function GamePage({
           </div>
         </div>
       ) : (
-        <div className="result-strip">
-          <Crown size={18} />
-          <span>
-            {winnersSummary ? `Winner: ${winnersSummary}` : "Match finished"}
-          </span>
+        <div className="game-controls finished-controls">
+          <div className="result-strip">
+            <Crown size={18} />
+            <span>
+              {winnersSummary ? `Winner: ${winnersSummary}` : "Match finished"}
+            </span>
+          </div>
+          <button className="primary-action compact" onClick={onNextRoom}>
+            <Play size={17} />
+            Next Room
+          </button>
+          <button className="secondary-action compact" onClick={onProof}>
+            <History size={17} />
+            Proof
+          </button>
         </div>
       )}
     </section>
@@ -739,10 +830,12 @@ function ProfilePage({
   profile,
   wallet,
   onRefresh,
+  onInvite,
 }: {
-  profile: { totalMatches: number; wins: number; losses: number };
+  profile: ProfileState;
   wallet: WalletDto;
   onRefresh: () => void;
+  onInvite: () => void;
 }) {
   useEffect(() => {
     void onRefresh();
@@ -756,6 +849,28 @@ function ProfilePage({
         <Metric label="Losses" value={`${profile.losses}`} />
         <Metric label="Credits" value={`${wallet.balance}`} />
       </div>
+      <div className="invite-panel">
+        <div>
+          <span>Invite Code</span>
+          <strong>{profile.referralCode ?? "Pending"}</strong>
+        </div>
+        <div>
+          <span>Invited</span>
+          <strong>{profile.referralCount}</strong>
+        </div>
+        <div>
+          <span>Bonus</span>
+          <strong>{profile.referralRewards} CR</strong>
+        </div>
+        <button
+          className="primary-action compact"
+          disabled={!profile.referralLink}
+          onClick={onInvite}
+        >
+          <Share2 size={17} />
+          Invite
+        </button>
+      </div>
     </section>
   );
 }
@@ -768,9 +883,13 @@ function ListEmpty<T>({ items, text }: { items: T[]; text: string }) {
 function WinnerModal({
   match,
   onClose,
+  onNextRoom,
+  onProof,
 }: {
   match: MatchDto;
   onClose: () => void;
+  onNextRoom: () => void;
+  onProof: () => void;
 }) {
   const split = match.winners.length > 1;
   const myWin = match.winners.some((winner) => winner.isMine);
@@ -813,10 +932,86 @@ function WinnerModal({
             </div>
           ))}
         </div>
+        <div className="modal-actions">
+          <button className="primary-action" onClick={onNextRoom}>
+            <Play size={18} />
+            Next Room
+          </button>
+          <button className="secondary-action" onClick={onClose}>
+            Close
+          </button>
+          <button className="secondary-action" onClick={onProof}>
+            <History size={17} />
+            Proof
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProofModal({
+  proof,
+  audit,
+  onClose,
+}: {
+  proof: FairProofDto;
+  audit: AuditEntryDto[];
+  onClose: () => void;
+}) {
+  const winnerSeats = proof.winnerSeats?.length
+    ? proof.winnerSeats
+    : proof.winnerSeat
+      ? [proof.winnerSeat]
+      : [];
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="proof-title"
+    >
+      <div className="proof-modal">
+        <p className="eyebrow">Fair Proof</p>
+        <h2 id="proof-title">Audit Trail</h2>
+        <div className="proof-grid">
+          <ProofItem label="Seed Hash" value={proof.seedHash} />
+          <ProofItem
+            label="Seed Reveal"
+            value={proof.seedReveal ?? "Pending"}
+          />
+          <ProofItem label="Called" value={`${proof.calledNumbers.length}`} />
+          <ProofItem
+            label="Winners"
+            value={
+              winnerSeats.length
+                ? winnerSeats.map((seat) => `Seat ${seat}`).join(", ")
+                : "None"
+            }
+          />
+        </div>
+        <div className="audit-list">
+          {audit.slice(-10).map((item) => (
+            <div className="audit-row" key={item.id}>
+              <strong>{item.action.replaceAll("_", " ")}</strong>
+              <span>{new Date(item.createdAt).toLocaleTimeString()}</span>
+            </div>
+          ))}
+        </div>
         <button className="primary-action" onClick={onClose}>
           Close
         </button>
       </div>
+    </div>
+  );
+}
+
+function ProofItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }

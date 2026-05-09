@@ -39,6 +39,7 @@ enum TransactionType {
   ENTRY_FEE
   REFUND
   WIN_PAYOUT
+  REFERRAL_BONUS
   ADMIN_ADJUSTMENT
 }
 
@@ -50,24 +51,39 @@ enum PlayerResultStatus {
 }
 
 model User {
-  id          String        @id @default(cuid())
-  telegramId BigInt        @unique
-  username    String?
-  firstName   String?
-  lastName    String?
-  photoUrl    String?
-  isAdmin     Boolean       @default(false)
-  isBanned    Boolean       @default(false)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  wallet      Wallet?
-  seats       Seat[]
-  wins        Match[]       @relation("Winner")
-  results     PlayerResult[]
-  txns        Transaction[]
-  auditLogs   AuditLog[]
+  id             String         @id @default(cuid())
+  telegramId     BigInt         @unique
+  username       String?
+  firstName      String?
+  lastName       String?
+  photoUrl       String?
+  referralCode   String?        @unique
+  isAdmin        Boolean        @default(false)
+  isBanned       Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  wallet         Wallet?
+  seats          Seat[]
+  wins           Match[]        @relation("Winner")
+  results        PlayerResult[]
+  txns           Transaction[]
+  auditLogs      AuditLog[]
+  referralsMade  Referral[]     @relation("ReferralReferrer")
+  referralSource Referral?      @relation("ReferralReferred")
 
   @@index([createdAt])
+}
+
+model Referral {
+  id         String   @id @default(cuid())
+  referrerId String
+  referredId String   @unique
+  reward     Int      @default(0)
+  createdAt  DateTime @default(now())
+  referrer   User     @relation("ReferralReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred   User     @relation("ReferralReferred", fields: [referredId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId, createdAt])
 }
 
 model Wallet {
@@ -112,25 +128,25 @@ model Seat {
 }
 
 model Match {
-  id            String       @id @default(cuid())
-  roomId        String       @unique
-  status        MatchStatus  @default(ACTIVE)
+  id            String         @id @default(cuid())
+  roomId        String         @unique
+  status        MatchStatus    @default(ACTIVE)
   serverSeed    String
   seedHash      String
   seedReveal    String?
   drawOrder     Json
   calledNumbers Json
-  currentIndex  Int          @default(0)
-  prizePool     Int          @default(0)
-  pattern       String       @default("ROW,COLUMN,DIAGONAL")
+  currentIndex  Int            @default(0)
+  prizePool     Int            @default(0)
+  pattern       String         @default("ROW,COLUMN,DIAGONAL")
   winnerSeat    Int?
   winnerUserId  String?
-  startedAt     DateTime     @default(now())
-  lastDrawAt    DateTime     @default(now())
+  startedAt     DateTime       @default(now())
+  lastDrawAt    DateTime       @default(now())
   finishedAt    DateTime?
-  updatedAt     DateTime     @updatedAt
-  room          Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  winner        User?        @relation("Winner", fields: [winnerUserId], references: [id])
+  updatedAt     DateTime       @updatedAt
+  room          Room           @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  winner        User?          @relation("Winner", fields: [winnerUserId], references: [id])
   results       PlayerResult[]
   txns          Transaction[]
 
