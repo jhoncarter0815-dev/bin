@@ -1,14 +1,22 @@
 export type TelegramWebApp = {
   initData: string;
   colorScheme?: "light" | "dark";
+  viewportHeight?: number;
+  viewportStableHeight?: number;
   ready: () => void;
   expand: () => void;
   close: () => void;
+  onEvent?: (
+    event: "viewportChanged",
+    handler: (payload?: { isStateStable?: boolean }) => void,
+  ) => void;
   HapticFeedback?: {
     impactOccurred: (style: "light" | "medium" | "heavy") => void;
     notificationOccurred: (type: "error" | "success" | "warning") => void;
   };
 };
+
+let viewportListenerAttached = false;
 
 declare global {
   interface Window {
@@ -26,6 +34,14 @@ export function prepareTelegramShell(): void {
   const app = getTelegramApp();
   app?.ready();
   app?.expand();
+  syncViewportHeight(app);
+
+  if (viewportListenerAttached) return;
+
+  const sync = () => syncViewportHeight(getTelegramApp());
+  app?.onEvent?.("viewportChanged", sync);
+  window.addEventListener("resize", sync);
+  viewportListenerAttached = true;
 }
 
 export function getInitData(): string {
@@ -36,3 +52,9 @@ export function haptic(type: "light" | "medium" | "heavy" = "light"): void {
   getTelegramApp()?.HapticFeedback?.impactOccurred(type);
 }
 
+function syncViewportHeight(app?: TelegramWebApp): void {
+  const height =
+    app?.viewportHeight ?? app?.viewportStableHeight ?? window.innerHeight;
+  if (!Number.isFinite(height) || height <= 0) return;
+  document.documentElement.style.setProperty("--app-height", `${height}px`);
+}
