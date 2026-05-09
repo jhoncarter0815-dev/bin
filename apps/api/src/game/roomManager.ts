@@ -3,11 +3,23 @@ import { Prisma, type Room, type Seat, type User } from "@prisma/client";
 import { customAlphabet } from "nanoid";
 import { createCard, hasBingo } from "@bingo/shared";
 import { env } from "../config.js";
-import { ConflictError, ForbiddenError, NotFoundError, AppError } from "../errors.js";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  AppError,
+} from "../errors.js";
 import { prisma } from "../prisma.js";
 import { emitMatch, emitRoom, emitUser } from "../realtime.js";
 import { creditWallet, debitWallet } from "../services/wallet.js";
-import { toMatchDto, toResultDto, toRoomDto, parseCard, parseNumberArray, parsePattern } from "./dto.js";
+import {
+  toMatchDto,
+  toResultDto,
+  toRoomDto,
+  parseCard,
+  parseNumberArray,
+  parsePattern,
+} from "./dto.js";
 import { createFairSeed, randomFromSeed } from "./fairness.js";
 
 const makeCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 7);
@@ -19,16 +31,16 @@ const roomInclude = {
         select: {
           username: true,
           firstName: true,
-          lastName: true
-        }
-      }
-    }
-  }
+          lastName: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.RoomInclude;
 
 const matchInclude = {
   room: {
-    include: roomInclude
+    include: roomInclude,
   },
   results: {
     include: {
@@ -36,27 +48,31 @@ const matchInclude = {
         select: {
           username: true,
           firstName: true,
-          lastName: true
-        }
-      }
-    }
-  }
+          lastName: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.MatchInclude;
 
 type MatchWithSeats = Prisma.MatchGetPayload<{ include: typeof matchInclude }>;
 type WinnerSeat = MatchWithSeats["room"]["seats"][number];
+type ClaimBingoOptions = {
+  markedNumbers?: number[];
+};
 
 export async function getOrCreatePublicRoom(userId?: string) {
   const existing = await prisma.room.findFirst({
     where: {
       type: "PUBLIC",
-      status: { in: ["OPEN", "COUNTDOWN"] }
+      status: { in: ["OPEN", "COUNTDOWN"] },
     },
     orderBy: { startsAt: "asc" },
-    include: roomInclude
+    include: roomInclude,
   });
 
-  if (existing && existing.seats.length < existing.maxSeats) return toRoomDto(existing, userId);
+  if (existing && existing.seats.length < existing.maxSeats)
+    return toRoomDto(existing, userId);
 
   const room = await prisma.room.create({
     data: {
@@ -65,9 +81,9 @@ export async function getOrCreatePublicRoom(userId?: string) {
       status: "COUNTDOWN",
       entryFee: env.PUBLIC_ENTRY_FEE,
       maxSeats: 200,
-      startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000)
+      startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
     },
-    include: roomInclude
+    include: roomInclude,
   });
 
   return toRoomDto(room, userId);
@@ -76,13 +92,17 @@ export async function getOrCreatePublicRoom(userId?: string) {
 export async function getRoom(roomId: string, userId?: string) {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
-    include: roomInclude
+    include: roomInclude,
   });
   if (!room) throw new NotFoundError("Room not found");
   return toRoomDto(room, userId);
 }
 
-export async function joinSeat(roomId: string, userId: string, seatNumber: number) {
+export async function joinSeat(
+  roomId: string,
+  userId: string,
+  seatNumber: number,
+) {
   if (!Number.isInteger(seatNumber) || seatNumber < 1 || seatNumber > 200) {
     throw new AppError("Seat must be between 1 and 200");
   }
@@ -91,16 +111,20 @@ export async function joinSeat(roomId: string, userId: string, seatNumber: numbe
     async (tx) => {
       const room = await tx.room.findUnique({
         where: { id: roomId },
-        include: { seats: true }
+        include: { seats: true },
       });
       if (!room) throw new NotFoundError("Room not found");
-      if (!["OPEN", "COUNTDOWN"].includes(room.status)) throw new ConflictError("Room already started");
-      if (seatNumber > room.maxSeats) throw new AppError("Seat is outside room capacity");
+      if (!["OPEN", "COUNTDOWN"].includes(room.status))
+        throw new ConflictError("Room already started");
+      if (seatNumber > room.maxSeats)
+        throw new AppError("Seat is outside room capacity");
 
       const existingForUser = room.seats.find((seat) => seat.userId === userId);
       if (existingForUser) {
         if (existingForUser.seatNumber === seatNumber) return;
-        throw new ConflictError(`You already hold seat #${existingForUser.seatNumber}`);
+        throw new ConflictError(
+          `You already hold seat #${existingForUser.seatNumber}`,
+        );
       }
 
       if (room.seats.some((seat) => seat.seatNumber === seatNumber)) {
@@ -113,7 +137,7 @@ export async function joinSeat(roomId: string, userId: string, seatNumber: numbe
           amount: room.entryFee,
           type: "ENTRY_FEE",
           roomId,
-          description: `Entry fee for room ${room.code}`
+          description: `Entry fee for room ${room.code}`,
         });
       }
 
@@ -123,18 +147,18 @@ export async function joinSeat(roomId: string, userId: string, seatNumber: numbe
           roomId,
           userId,
           seatNumber,
-          card: card as unknown as Prisma.InputJsonValue
-        }
+          card: card as unknown as Prisma.InputJsonValue,
+        },
       });
 
       if (room.status === "OPEN") {
         await tx.room.update({
           where: { id: roomId },
-          data: { status: "COUNTDOWN" }
+          data: { status: "COUNTDOWN" },
         });
       }
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
 
   await broadcastRoom(roomId, userId);
@@ -146,7 +170,7 @@ export async function leaveRoom(roomId: string, userId: string) {
     async (tx) => {
       const seat = await tx.seat.findUnique({
         where: { roomId_userId: { roomId, userId } },
-        include: { room: true }
+        include: { room: true },
       });
       if (!seat) return;
       if (!["OPEN", "COUNTDOWN"].includes(seat.room.status)) {
@@ -160,11 +184,11 @@ export async function leaveRoom(roomId: string, userId: string) {
           amount: seat.room.entryFee,
           type: "REFUND",
           roomId,
-          description: `Refund for leaving room ${seat.room.code}`
+          description: `Refund for leaving room ${seat.room.code}`,
         });
       }
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
 
   await broadcastRoom(roomId, userId);
@@ -182,8 +206,8 @@ export async function startPractice(user: Pick<User, "id">) {
         status: "ACTIVE",
         entryFee: 0,
         maxSeats: 5,
-        startsAt: new Date()
-      }
+        startsAt: new Date(),
+      },
     });
 
     const allPlayers = [user, ...botUsers].slice(0, 5);
@@ -195,8 +219,10 @@ export async function startPractice(user: Pick<User, "id">) {
           userId: player.id,
           seatNumber,
           status: "ACTIVE",
-          card: createCard(randomFromSeed(`${fair.seed}:card:${player.id}:${seatNumber}`)) as unknown as Prisma.InputJsonValue
-        }
+          card: createCard(
+            randomFromSeed(`${fair.seed}:card:${player.id}:${seatNumber}`),
+          ) as unknown as Prisma.InputJsonValue,
+        },
       });
     }
 
@@ -207,9 +233,9 @@ export async function startPractice(user: Pick<User, "id">) {
         seedHash: fair.seedHash,
         drawOrder: fair.drawOrder as Prisma.InputJsonValue,
         calledNumbers: [],
-        prizePool: 0
+        prizePool: 0,
       },
-      include: matchInclude
+      include: matchInclude,
     });
   });
 
@@ -223,38 +249,51 @@ export async function getActiveMatchForUser(userId: string) {
       status: "ACTIVE",
       room: {
         seats: {
-          some: { userId }
-        }
-      }
+          some: { userId },
+        },
+      },
     },
     orderBy: { startedAt: "desc" },
-    include: matchInclude
+    include: matchInclude,
   });
   return match ? toMatchDto(match, userId) : null;
 }
 
-export async function claimBingo(matchId: string, userId: string) {
+export async function claimBingo(
+  matchId: string,
+  userId: string,
+  options: ClaimBingoOptions = {},
+) {
   const result = await prisma.$transaction(
     async (tx) => {
       const match = await tx.match.findUnique({
         where: { id: matchId },
-        include: matchInclude
+        include: matchInclude,
       });
       if (!match) throw new NotFoundError("Match not found");
-      if (match.status !== "ACTIVE") throw new ConflictError("Match is already finished");
+      if (match.status !== "ACTIVE")
+        throw new ConflictError("Match is already finished");
 
       const seat = match.room.seats.find((item) => item.userId === userId);
       if (!seat) throw new ForbiddenError("You are not seated in this match");
-      if (seat.status === "FORFEIT") throw new ForbiddenError("Forfeited seats cannot claim bingo");
+      if (seat.status === "FORFEIT")
+        throw new ForbiddenError("Forfeited seats cannot claim bingo");
+
+      if (options.markedNumbers)
+        verifyManualBingoClaim(match, seat, options.markedNumbers);
 
       const winners = findWinningSeats(match);
       if (!winners.some((winner) => winner.userId === userId)) {
-        throw new AppError("That card does not have bingo yet", 422, "INVALID_BINGO");
+        throw new AppError(
+          "That card does not have bingo yet",
+          422,
+          "INVALID_BINGO",
+        );
       }
 
       return finishMatchWithWinners(tx, match, winners);
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
 
   await broadcastMatch(result.id);
@@ -265,7 +304,7 @@ export async function claimBingo(matchId: string, userId: string) {
 export async function forfeitActiveMatch(matchId: string, userId: string) {
   const match = await prisma.match.findUnique({
     where: { id: matchId },
-    include: matchInclude
+    include: matchInclude,
   });
   if (!match) throw new NotFoundError("Match not found");
   const seat = match.room.seats.find((item) => item.userId === userId);
@@ -273,7 +312,7 @@ export async function forfeitActiveMatch(matchId: string, userId: string) {
 
   await prisma.seat.update({
     where: { id: seat.id },
-    data: { status: "FORFEIT" }
+    data: { status: "FORFEIT" },
   });
 
   await prisma.playerResult.upsert({
@@ -283,9 +322,9 @@ export async function forfeitActiveMatch(matchId: string, userId: string) {
       userId,
       seatNumber: seat.seatNumber,
       status: "FORFEIT",
-      pot: 0
+      pot: 0,
     },
-    update: { status: "FORFEIT" }
+    update: { status: "FORFEIT" },
   });
 
   await broadcastMatch(matchId);
@@ -301,10 +340,10 @@ export async function startDueRooms() {
   const dueRooms = await prisma.room.findMany({
     where: {
       status: { in: ["OPEN", "COUNTDOWN"] },
-      startsAt: { lte: new Date() }
+      startsAt: { lte: new Date() },
     },
     include: { seats: true },
-    take: 25
+    take: 25,
   });
 
   let started = 0;
@@ -315,8 +354,8 @@ export async function startDueRooms() {
         where: { id: room.id },
         data: {
           status: "COUNTDOWN",
-          startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000)
-        }
+          startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
+        },
       });
       await broadcastRoom(room.id);
       continue;
@@ -331,10 +370,10 @@ export async function drawDueMatches() {
   const matches = await prisma.match.findMany({
     where: {
       status: "ACTIVE",
-      lastDrawAt: { lte: new Date(Date.now() - env.DRAW_INTERVAL_MS) }
+      lastDrawAt: { lte: new Date(Date.now() - env.DRAW_INTERVAL_MS) },
     },
     include: matchInclude,
-    take: 50
+    take: 50,
   });
 
   let drawn = 0;
@@ -350,7 +389,7 @@ export async function drawDueMatches() {
       async (tx) => {
         const activeMatch = await tx.match.findUnique({
           where: { id: match.id },
-          include: matchInclude
+          include: matchInclude,
         });
         if (!activeMatch || activeMatch.status !== "ACTIVE") return null;
 
@@ -364,9 +403,9 @@ export async function drawDueMatches() {
           data: {
             calledNumbers: [...calledNumbers, nextNumber],
             currentIndex: { increment: 1 },
-            lastDrawAt: new Date()
+            lastDrawAt: new Date(),
           },
-          include: matchInclude
+          include: matchInclude,
         });
 
         const winners = findWinningSeats(drawnMatch);
@@ -374,7 +413,7 @@ export async function drawDueMatches() {
 
         return finishMatchWithWinners(tx, drawnMatch, winners);
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
 
     if (updated) {
@@ -389,13 +428,18 @@ export async function drawDueMatches() {
 async function finishMatchWithWinners(
   tx: Prisma.TransactionClient,
   match: MatchWithSeats,
-  winners: WinnerSeat[]
+  winners: WinnerSeat[],
 ) {
-  if (winners.length === 0) throw new AppError("Cannot finish match without winners");
+  if (winners.length === 0)
+    throw new AppError("Cannot finish match without winners");
 
-  const sortedWinners = [...winners].sort((a, b) => a.seatNumber - b.seatNumber);
+  const sortedWinners = [...winners].sort(
+    (a, b) => a.seatNumber - b.seatNumber,
+  );
   const payouts = splitPrizePool(match.prizePool, sortedWinners.length);
-  const payoutByUserId = new Map(sortedWinners.map((winner, index) => [winner.userId, payouts[index] ?? 0]));
+  const payoutByUserId = new Map(
+    sortedWinners.map((winner, index) => [winner.userId, payouts[index] ?? 0]),
+  );
   const firstWinner = sortedWinners[0]!;
 
   await tx.match.update({
@@ -405,13 +449,13 @@ async function finishMatchWithWinners(
       winnerSeat: firstWinner.seatNumber,
       winnerUserId: firstWinner.userId,
       seedReveal: match.serverSeed,
-      finishedAt: new Date()
-    }
+      finishedAt: new Date(),
+    },
   });
 
   await tx.room.update({
     where: { id: match.roomId },
-    data: { status: "FINISHED" }
+    data: { status: "FINISHED" },
   });
 
   await tx.playerResult.createMany({
@@ -422,11 +466,15 @@ async function finishMatchWithWinners(
         matchId: match.id,
         userId: seat.userId,
         seatNumber: seat.seatNumber,
-        status: isWinner ? "WINNER" : seat.status === "FORFEIT" ? "FORFEIT" : "LOST",
-        pot
+        status: isWinner
+          ? "WINNER"
+          : seat.status === "FORFEIT"
+            ? "FORFEIT"
+            : "LOST",
+        pot,
       };
     }),
-    skipDuplicates: true
+    skipDuplicates: true,
   });
 
   for (const winner of sortedWinners) {
@@ -438,13 +486,13 @@ async function finishMatchWithWinners(
       type: "WIN_PAYOUT",
       roomId: match.roomId,
       matchId: match.id,
-      description: `Bingo payout for room ${match.room.code}`
+      description: `Bingo payout for room ${match.room.code}`,
     });
   }
 
   return tx.match.findUniqueOrThrow({
     where: { id: match.id },
-    include: matchInclude
+    include: matchInclude,
   });
 }
 
@@ -458,11 +506,46 @@ function findWinningSeats(match: MatchWithSeats): WinnerSeat[] {
     .sort((a, b) => a.seatNumber - b.seatNumber);
 }
 
+function verifyManualBingoClaim(
+  match: MatchWithSeats,
+  seat: WinnerSeat,
+  markedNumbers: number[],
+): void {
+  const calledNumbers = parseNumberArray(match.calledNumbers);
+  const called = new Set(calledNumbers);
+  const uniqueMarkedNumbers = [...new Set(markedNumbers)];
+
+  if (uniqueMarkedNumbers.some((value) => !called.has(value))) {
+    throw new AppError(
+      "Only called numbers can be marked",
+      422,
+      "INVALID_MARKS",
+    );
+  }
+
+  if (
+    !hasBingo(
+      parseCard(seat.card),
+      uniqueMarkedNumbers,
+      parsePattern(match.pattern),
+    )
+  ) {
+    throw new AppError(
+      "Marked card does not have bingo yet",
+      422,
+      "INVALID_BINGO",
+    );
+  }
+}
+
 function splitPrizePool(prizePool: number, winnerCount: number): number[] {
   if (winnerCount <= 0) return [];
   const basePrize = Math.floor(prizePool / winnerCount);
   const remainder = prizePool % winnerCount;
-  return Array.from({ length: winnerCount }, (_, index) => basePrize + (index < remainder ? 1 : 0));
+  return Array.from(
+    { length: winnerCount },
+    (_, index) => basePrize + (index < remainder ? 1 : 0),
+  );
 }
 
 export async function getHistory(userId: string) {
@@ -477,12 +560,12 @@ export async function getHistory(userId: string) {
           results: {
             select: {
               status: true,
-              seatNumber: true
-            }
-          }
-        }
-      }
-    }
+              seatNumber: true,
+            },
+          },
+        },
+      },
+    },
   });
   return results.map(toResultDto);
 }
@@ -500,10 +583,10 @@ export async function getFairProof(matchId: string) {
       results: {
         select: {
           status: true,
-          seatNumber: true
-        }
-      }
-    }
+          seatNumber: true,
+        },
+      },
+    },
   });
   if (!match) throw new NotFoundError("Match not found");
   return {
@@ -514,9 +597,12 @@ export async function getFairProof(matchId: string) {
     calledNumbers: parseNumberArray(match.calledNumbers),
     winnerSeat: match.winnerSeat,
     winnerSeats: match.results
-      .filter((result) => result.status === "WINNER" && typeof result.seatNumber === "number")
+      .filter(
+        (result) =>
+          result.status === "WINNER" && typeof result.seatNumber === "number",
+      )
       .map((result) => result.seatNumber!)
-      .sort((a, b) => a - b)
+      .sort((a, b) => a - b),
   };
 }
 
@@ -526,17 +612,17 @@ async function startRoom(room: Room & { seats: Seat[] }) {
     async (tx) => {
       const activeRoom = await tx.room.findUnique({
         where: { id: room.id },
-        include: { seats: true }
+        include: { seats: true },
       });
       if (!activeRoom || activeRoom.status === "ACTIVE") return null;
 
       await tx.seat.updateMany({
         where: { roomId: room.id },
-        data: { status: "ACTIVE" }
+        data: { status: "ACTIVE" },
       });
       await tx.room.update({
         where: { id: room.id },
-        data: { status: "ACTIVE" }
+        data: { status: "ACTIVE" },
       });
 
       return tx.match.create({
@@ -546,12 +632,12 @@ async function startRoom(room: Room & { seats: Seat[] }) {
           seedHash: fair.seedHash,
           drawOrder: fair.drawOrder as Prisma.InputJsonValue,
           calledNumbers: [],
-          prizePool: activeRoom.seats.length * room.entryFee
+          prizePool: activeRoom.seats.length * room.entryFee,
         },
-        include: matchInclude
+        include: matchInclude,
       });
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
 
   if (match) {
@@ -563,7 +649,7 @@ async function startRoom(room: Room & { seats: Seat[] }) {
 async function finishWithoutWinner(matchId: string) {
   const existing = await prisma.match.findUnique({
     where: { id: matchId },
-    select: { serverSeed: true }
+    select: { serverSeed: true },
   });
   if (!existing) return;
 
@@ -572,14 +658,14 @@ async function finishWithoutWinner(matchId: string) {
     data: {
       status: "FINISHED",
       seedReveal: existing.serverSeed,
-      finishedAt: new Date()
+      finishedAt: new Date(),
     },
-    include: matchInclude
+    include: matchInclude,
   });
 
   await prisma.room.update({
     where: { id: match.roomId },
-    data: { status: "FINISHED" }
+    data: { status: "FINISHED" },
   });
 
   await prisma.playerResult.createMany({
@@ -588,9 +674,9 @@ async function finishWithoutWinner(matchId: string) {
       userId: seat.userId,
       seatNumber: seat.seatNumber,
       status: seat.status === "FORFEIT" ? "FORFEIT" : "LOST",
-      pot: 0
+      pot: 0,
     })),
-    skipDuplicates: true
+    skipDuplicates: true,
   });
 
   await broadcastMatch(matchId);
@@ -608,9 +694,9 @@ async function ensurePracticeBots() {
         telegramId,
         username: `bot_${index + 1}`,
         firstName: `Bot ${index + 1}`,
-        wallet: { create: { balance: 0 } }
+        wallet: { create: { balance: 0 } },
       },
-      update: {}
+      update: {},
     });
     bots.push(bot);
   }
@@ -621,7 +707,7 @@ async function ensurePracticeBots() {
 async function broadcastRoom(roomId: string, userId?: string) {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
-    include: roomInclude
+    include: roomInclude,
   });
   if (!room) return;
   emitRoom(roomId, toRoomDto(room));
@@ -631,7 +717,7 @@ async function broadcastRoom(roomId: string, userId?: string) {
 async function broadcastMatch(matchId: string) {
   const match = await prisma.match.findUnique({
     where: { id: matchId },
-    include: matchInclude
+    include: matchInclude,
   });
   if (!match) return;
   emitMatch(matchId, toMatchDto(match));

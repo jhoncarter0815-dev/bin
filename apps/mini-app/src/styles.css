@@ -709,10 +709,39 @@ button {
 }
 
 .card-cell {
+  padding: 0;
   color: #d9e4f6;
   border: 1px solid rgba(255, 255, 255, 0.07);
   background: var(--card);
+  cursor: default;
   font-size: clamp(0.9rem, 4vw, 1.2rem);
+  transition:
+    transform 0.14s ease,
+    border-color 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.card-cell:disabled {
+  opacity: 1;
+}
+
+.card-cell.callable {
+  border-color: rgba(100, 228, 239, 0.25);
+  cursor: pointer;
+}
+
+.card-cell.callable:not(.marked) {
+  color: #f8fbff;
+  background: rgba(100, 228, 239, 0.08);
+}
+
+.card-cell.callable:active {
+  transform: scale(0.965);
+}
+
+.card-cell.uncalled {
+  color: rgba(217, 228, 246, 0.54);
 }
 
 .card-cell.marked {
@@ -882,6 +911,11 @@ button {
   border-radius: 0.85rem;
   background: rgba(155, 168, 255, 0.08);
   text-transform: uppercase;
+}
+
+.text-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .text-action.danger {

@@ -4,7 +4,7 @@ import type {
   PublicUser,
   RoomDto,
   TransactionDto,
-  WalletDto
+  WalletDto,
 } from "@bingo/shared";
 import { getInitData } from "./telegram";
 
@@ -33,7 +33,7 @@ export async function authenticate(): Promise<Session> {
   const session = await request<Session>("/api/auth/telegram", {
     method: "POST",
     auth: false,
-    body: initData ? { initData } : { dev: true, devUser: { id: devUserId } }
+    body: initData ? { initData } : { dev: true, devUser: { id: devUserId } },
   });
   setToken(session.token);
   return session;
@@ -50,24 +50,25 @@ export const endpoints = {
   joinSeat: (roomId: string, seatNumber: number) =>
     api<RoomDto>(`/api/rooms/${roomId}/join-seat`, {
       method: "POST",
-      body: { seatNumber }
+      body: { seatNumber },
     }),
   leaveRoom: (roomId: string) =>
     api<{ ok: true }>(`/api/rooms/${roomId}/leave`, {
-      method: "POST"
+      method: "POST",
     }),
   startPractice: () =>
     api<MatchDto>("/api/practice/start", {
-      method: "POST"
+      method: "POST",
     }),
   activeMatch: () => api<MatchDto | null>("/api/match/active"),
-  claimBingo: (matchId: string) =>
+  claimBingo: (matchId: string, markedNumbers?: number[]) =>
     api<MatchDto>(`/api/match/${matchId}/bingo`, {
-      method: "POST"
+      method: "POST",
+      ...(markedNumbers === undefined ? {} : { body: { markedNumbers } }),
     }),
   exitMatch: (matchId: string) =>
     api<{ ok: true }>(`/api/match/${matchId}/exit`, {
-      method: "POST"
+      method: "POST",
     }),
   fair: (matchId: string) =>
     api<{
@@ -106,12 +107,14 @@ async function request<T>(path: string, init: ApiInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
-    body: init.body === undefined ? undefined : JSON.stringify(init.body)
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(payload?.error ?? `Request failed with status ${response.status}`);
+    throw new Error(
+      payload?.error ?? `Request failed with status ${response.status}`,
+    );
   }
   return payload as T;
 }

@@ -20,13 +20,21 @@ import type {
   TransactionDto,
   WalletDto,
 } from "@bingo/shared";
-import { BINGO_LETTERS, formatBall, hasBingo, isMarked } from "@bingo/shared";
+import {
+  BINGO_LETTERS,
+  BINGO_MAX_BALL,
+  formatBall,
+  hasBingo,
+  isMarked,
+} from "@bingo/shared";
 import { authenticate, endpoints, type Session } from "./api";
 import { createBingoSocket, type BingoSocket } from "./socket";
 import { haptic, prepareTelegramShell } from "./telegram";
 
 type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
 const AUTO_BINGO_KEY = "bingo_auto_bingo";
+const MANUAL_MARKS_KEY = "bingo_manual_marks";
+type ManualMarksByMatch = Record<string, number[]>;
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -46,6 +54,8 @@ export function App() {
     null,
   );
   const [autoBingo, setAutoBingo] = useState(readAutoBingoPreference);
+  const [manualMarksByMatch, setManualMarksByMatch] =
+    useState<ManualMarksByMatch>(readManualMarks);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const autoBingoAttempt = useRef<string | null>(null);
@@ -112,6 +122,10 @@ export function App() {
     match?.calledNumbers,
     match?.pattern,
   ]);
+
+  useEffect(() => {
+    writeManualMarks(manualMarksByMatch);
+  }, [manualMarksByMatch]);
 
   async function boot() {
     try {
@@ -186,7 +200,10 @@ export function App() {
   async function claimBingo() {
     if (!match) return;
     await runAction(async () => {
-      const nextMatch = await endpoints.claimBingo(match.id);
+      const markedNumbers = autoBingo
+        ? undefined
+        : validManualMarksForMatch(match, manualMarksByMatch[match.id] ?? []);
+      const nextMatch = await endpoints.claimBingo(match.id, markedNumbers);
       setMatch(nextMatch);
       setWallet(await endpoints.wallet());
       await refreshAccount();
@@ -213,6 +230,22 @@ export function App() {
     haptic("light");
   }
 
+  function toggleManualMark(value: number) {
+    if (!match || autoBingo || !match.calledNumbers.includes(value)) return;
+
+    setManualMarksByMatch((current) => {
+      const nextNumbers = new Set(current[match.id] ?? []);
+      if (nextNumbers.has(value)) nextNumbers.delete(value);
+      else nextNumbers.add(value);
+
+      return {
+        ...current,
+        [match.id]: [...nextNumbers].sort((a, b) => a - b),
+      };
+    });
+    haptic("light");
+  }
+
   async function exitMatch() {
     if (!match) return;
     await runAction(async () => {
@@ -236,6 +269,7 @@ export function App() {
   }
 
   const activeSeat = room?.seats.find((seat) => seat.isMine)?.seatNumber;
+  const manualMarkedNumbers = match ? (manualMarksByMatch[match.id] ?? []) : [];
 
   return (
     <div className="app-shell">
@@ -279,7 +313,9 @@ export function App() {
           <GamePage
             match={match}
             autoBingo={autoBingo}
+            manualMarkedNumbers={manualMarkedNumbers}
             onAutoBingoChange={changeAutoBingo}
+            onManualMark={toggleManualMark}
             onBingo={claimBingo}
             onExit={exitMatch}
           />
@@ -483,13 +519,17 @@ function PlayPage({
 function GamePage({
   match,
   autoBingo,
+  manualMarkedNumbers,
   onAutoBingoChange,
+  onManualMark,
   onBingo,
   onExit,
 }: {
   match: MatchDto;
   autoBingo: boolean;
+  manualMarkedNumbers: number[];
   onAutoBingoChange: (enabled: boolean) => void;
+  onManualMark: (value: number) => void;
   onBingo: () => void;
   onExit: () => void;
 }) {
@@ -497,6 +537,14 @@ function GamePage({
     () => new Set(match.calledNumbers),
     [match.calledNumbers],
   );
+  const manualMarked = useMemo(
+    () => new Set(manualMarkedNumbers.filter((value) => called.has(value))),
+    [called, manualMarkedNumbers],
+  );
+  const manualBingoReady = Boolean(
+    match.myCard && hasBingo(match.myCard, manualMarked, [match.pattern]),
+  );
+  const canClaim = autoBingo || manualBingoReady;
   const current = match.currentNumber ? formatBall(match.currentNumber) : "...";
   const winnersSummary = match.winners
     .map((winner) => `Seat ${winner.seatNumber}`)
@@ -538,14 +586,45 @@ function GamePage({
               </div>
             ))}
             {match.myCard.flat().map((cell) => {
-              const marked = isMarked(cell, called);
+              const cellNumber =
+                typeof cell.value === "number" ? cell.value : null;
+              const calledCell = cellNumber !== null && called.has(cellNumber);
+              const marked = autoBingo
+                ? isMarked(cell, called)
+                : cell.value === "FREE" ||
+                  (cellNumber !== null && manualMarked.has(cellNumber));
+              const clickable =
+                !autoBingo && match.status === "ACTIVE" && calledCell;
               return (
-                <div
-                  className={`card-cell ${marked ? "marked" : ""}`}
+                <button
+                  type="button"
+                  className={[
+                    "card-cell",
+                    !autoBingo ? "manual-mode" : "",
+                    clickable ? "callable" : "",
+                    !autoBingo && cellNumber !== null && !calledCell
+                      ? "uncalled"
+                      : "",
+                    marked ? "marked" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  disabled={!clickable}
                   key={`${cell.row}-${cell.col}`}
+                  onClick={() => {
+                    if (cellNumber !== null) onManualMark(cellNumber);
+                  }}
+                  aria-pressed={marked}
+                  title={
+                    !autoBingo && cellNumber !== null
+                      ? calledCell
+                        ? `Mark ${formatBall(cellNumber)}`
+                        : "Waiting for this number"
+                      : undefined
+                  }
                 >
                   {cell.value}
-                </div>
+                </button>
               );
             })}
           </div>
@@ -569,9 +648,16 @@ function GamePage({
             <i aria-hidden="true" />
           </label>
           <div className="game-actions">
-            <button className="text-action center" onClick={onBingo}>
+            <button
+              className="text-action center"
+              disabled={!canClaim}
+              onClick={onBingo}
+              title={
+                canClaim ? undefined : "Mark a complete bingo before claiming"
+              }
+            >
               <Crown size={18} />
-              Check
+              {autoBingo ? "Check" : "Bingo"}
             </button>
             <button className="danger-action compact" onClick={onExit}>
               <LogOut size={17} />
@@ -766,6 +852,54 @@ function writeAutoBingoPreference(enabled: boolean): void {
   } catch {
     // Local storage can be unavailable in strict embedded browser modes.
   }
+}
+
+function readManualMarks(): ManualMarksByMatch {
+  try {
+    const raw = localStorage.getItem(MANUAL_MARKS_KEY);
+    if (!raw) return {};
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([matchId, values]) => {
+        if (!Array.isArray(values)) return [];
+        const numbers = sanitizeManualMarks(values);
+        return numbers.length > 0 ? [[matchId, numbers]] : [];
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeManualMarks(marks: ManualMarksByMatch): void {
+  try {
+    localStorage.setItem(MANUAL_MARKS_KEY, JSON.stringify(marks));
+  } catch {
+    // Local storage can be unavailable in strict embedded browser modes.
+  }
+}
+
+function sanitizeManualMarks(values: unknown[]): number[] {
+  return [
+    ...new Set(
+      values.filter(
+        (value): value is number =>
+          typeof value === "number" &&
+          Number.isInteger(value) &&
+          value >= 1 &&
+          value <= BINGO_MAX_BALL,
+      ),
+    ),
+  ].sort((a, b) => a - b);
+}
+
+function validManualMarksForMatch(match: MatchDto, values: number[]): number[] {
+  const called = new Set(match.calledNumbers);
+  return sanitizeManualMarks(values).filter((value) => called.has(value));
 }
 
 function BottomNav({
