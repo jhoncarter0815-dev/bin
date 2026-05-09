@@ -21,7 +21,6 @@ const schema = z.object({
     .default("false"),
   PUBLIC_ROOM_SECONDS: z.coerce.number().int().positive().default(30),
   DRAW_INTERVAL_MS: z.coerce.number().int().positive().default(2500),
-  MIN_PLAYERS_TO_START: z.coerce.number().int().positive().default(2),
   PUBLIC_ENTRY_FEE: z.coerce.number().int().nonnegative().default(50),
   STARTING_CREDITS: z.coerce.number().int().nonnegative().default(1000)
 });

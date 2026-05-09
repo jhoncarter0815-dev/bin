@@ -309,7 +309,8 @@ export async function startDueRooms() {
 
   let started = 0;
   for (const room of dueRooms) {
-    if (room.type === "PUBLIC" && room.seats.length < env.MIN_PLAYERS_TO_START) {
+    if (room.type === "PUBLIC" && room.seats.length === 0) {
+      // Keep empty public rooms open, but start any seated room as soon as its countdown ends.
       await prisma.room.update({
         where: { id: room.id },
         data: {

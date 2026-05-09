@@ -73,7 +73,7 @@ button {
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
-  padding: calc(env(safe-area-inset-top) + 0.58rem) 0.78rem 0.58rem;
+  padding: calc(env(safe-area-inset-top) + 0.75rem) 0.85rem 0.75rem;
   border-bottom: 1px solid var(--line);
   background: rgba(6, 9, 18, 0.84);
   backdrop-filter: blur(18px);
@@ -82,8 +82,8 @@ button {
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 2.12rem;
-  height: 2.12rem;
+  width: 2.35rem;
+  height: 2.35rem;
   flex: 0 0 auto;
   border: 1px solid rgba(100, 228, 239, 0.35);
   border-radius: 0.7rem;
@@ -130,34 +130,17 @@ button {
 
 .screen {
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 0.55rem;
-  overflow: hidden;
-  padding: clamp(0.55rem, 1.4dvh, 0.85rem) 0.78rem
-    clamp(0.55rem, 1.4dvh, 0.85rem);
+  overflow-y: auto;
+  padding: 0.9rem 0.85rem 1rem;
 }
 
 .stack,
 .home-stack {
   display: grid;
-  gap: clamp(0.45rem, 1.1dvh, 0.75rem);
+  gap: 0.85rem;
   width: 100%;
   max-width: 760px;
-  height: 100%;
-  min-height: 0;
   margin: 0 auto;
-  overflow: hidden;
-}
-
-.home-stack {
-  grid-template-rows: minmax(0, 1fr) auto auto;
-}
-
-.data-stack {
-  align-content: start;
-  overflow-y: auto;
-  padding-bottom: 0.15rem;
 }
 
 .boot-panel,
@@ -174,9 +157,7 @@ button {
 .boot-panel {
   display: grid;
   justify-items: center;
-  align-self: center;
   gap: 0.8rem;
-  grid-row: 1 / -1;
   padding: 2rem 1rem;
   color: var(--cyan);
 }
@@ -202,7 +183,7 @@ button {
 
 .notice {
   max-width: 760px;
-  margin: 0 auto;
+  margin: 0 auto 0.8rem;
   padding: 0.75rem 0.85rem;
   border: 1px solid rgba(255, 123, 147, 0.28);
   border-radius: 0.8rem;
@@ -212,16 +193,11 @@ button {
   font-weight: 800;
 }
 
-.notice-slot {
-  min-height: 0;
-}
-
 .hero-panel {
   position: relative;
-  min-height: 0;
-  height: 100%;
+  min-height: 18.4rem;
   overflow: hidden;
-  padding: clamp(0.78rem, 1.6dvh, 1.05rem);
+  padding: 1.15rem;
   background:
     linear-gradient(145deg, rgba(20, 34, 63, 0.94), rgba(8, 13, 25, 0.97)),
     var(--panel);
@@ -236,15 +212,15 @@ button {
   position: relative;
   max-width: 14rem;
   margin-top: 0.5rem;
-  font-size: clamp(2.45rem, 7dvh, 3.9rem);
+  font-size: clamp(2.8rem, 15vw, 4.6rem);
   line-height: 0.86;
 }
 
 .hero-balance {
   display: inline-grid;
   gap: 0.15rem;
-  margin-top: clamp(0.48rem, 1.2dvh, 0.85rem);
-  padding: 0.58rem 0.72rem;
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.8rem;
   border: 1px solid rgba(127, 231, 182, 0.22);
   border-radius: 0.85rem;
   background: rgba(127, 231, 182, 0.09);
@@ -269,8 +245,8 @@ button {
 .hero-art {
   position: absolute;
   inset: auto -0.8rem -1.2rem auto;
-  width: clamp(9.8rem, 34dvh, 13.2rem);
-  height: clamp(9.8rem, 34dvh, 13.2rem);
+  width: 13.8rem;
+  height: 13.8rem;
   opacity: 0.95;
 }
 
@@ -289,17 +265,17 @@ button {
 .ball.big {
   right: 1.2rem;
   bottom: 1.1rem;
-  width: 52%;
-  height: 52%;
+  width: 7.2rem;
+  height: 7.2rem;
   background: var(--cyan);
-  font-size: 2.7rem;
+  font-size: 3.2rem;
 }
 
 .ball.small {
   right: 7.2rem;
   bottom: 6.8rem;
-  width: 25%;
-  height: 25%;
+  width: 3.4rem;
+  height: 3.4rem;
   background: var(--green);
   font-size: 1.1rem;
 }
@@ -307,8 +283,8 @@ button {
 .ball.gold {
   right: 0.4rem;
   bottom: 8rem;
-  width: 33%;
-  height: 33%;
+  width: 4.5rem;
+  height: 4.5rem;
   background: var(--yellow);
   font-size: 1.65rem;
 }
@@ -334,15 +310,15 @@ button {
 
 .metric-grid {
   position: absolute;
-  right: clamp(0.72rem, 1.4dvh, 1.05rem);
-  bottom: clamp(0.72rem, 1.4dvh, 1.05rem);
-  left: clamp(0.72rem, 1.4dvh, 1.05rem);
+  right: 1.1rem;
+  bottom: 1.05rem;
+  left: 1.1rem;
 }
 
 .metric,
 .timer-tile {
   min-width: 0;
-  padding: clamp(0.5rem, 1.1dvh, 0.68rem) 0.42rem;
+  padding: 0.72rem 0.45rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0.75rem;
   background: rgba(255, 255, 255, 0.045);
@@ -386,7 +362,7 @@ button {
   justify-content: center;
   gap: 0.55rem;
   width: 100%;
-  min-height: clamp(2.55rem, 5.6dvh, 3rem);
+  min-height: 3.05rem;
   border-radius: 0.85rem;
   font-size: 0.92rem;
   font-weight: 950;
@@ -435,7 +411,7 @@ button {
   display: grid;
   gap: 0.22rem;
   min-width: 0;
-  padding: clamp(0.68rem, 1.4dvh, 0.86rem);
+  padding: 0.9rem;
   border: 1px solid var(--line);
   border-radius: 0.85rem;
   background: rgba(255, 255, 255, 0.045);
@@ -488,17 +464,13 @@ button {
   font-weight: 850;
 }
 
-.play-stack {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 .game-stack {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .room-panel,
 .game-header {
-  padding: clamp(0.68rem, 1.35dvh, 0.9rem);
+  padding: 1rem;
 }
 
 .game-header {
@@ -522,7 +494,7 @@ button {
 .room-panel h2,
 .section-title {
   margin: 0.18rem 0 0;
-  font-size: 1.12rem;
+  font-size: 1.25rem;
   font-weight: 950;
 }
 
@@ -539,16 +511,13 @@ button {
 }
 
 .timer-tile {
-  width: 4.65rem;
+  width: 5.2rem;
   flex: 0 0 auto;
 }
 
 .seat-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 0.55rem;
-  min-height: 0;
-  overflow: hidden;
   padding: 0.65rem;
   border: 1px solid var(--line);
   border-radius: 0.95rem;
@@ -560,42 +529,6 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
-}
-
-.seat-range {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.seat-range span {
-  display: grid;
-  place-items: center;
-  min-height: 2rem;
-  border: 1px solid rgba(100, 228, 239, 0.2);
-  border-radius: 0.7rem;
-  color: var(--cyan);
-  background: rgba(100, 228, 239, 0.08);
-  font-size: 0.78rem;
-  font-weight: 950;
-  letter-spacing: 0.08em;
-}
-
-.icon-action {
-  display: grid;
-  place-items: center;
-  width: 2.25rem;
-  height: 2rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.7rem;
-  color: #dfe5ff;
-  background: rgba(155, 168, 255, 0.08);
-}
-
-.icon-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
 }
 
 .seat-legend {
@@ -628,22 +561,19 @@ button {
 
 .seat-grid {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 0.3rem;
-  min-height: 0;
-  overflow: hidden;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.38rem;
   padding: 0;
-  align-content: start;
 }
 
 .seat {
-  min-height: clamp(1.42rem, 4dvh, 1.72rem);
+  aspect-ratio: 1;
   min-width: 0;
   border: 1px solid rgba(127, 231, 182, 0.2);
-  border-radius: 0.48rem;
+  border-radius: 0.62rem;
   color: var(--green);
   background: rgba(127, 231, 182, 0.075);
-  font-size: 0.66rem;
+  font-size: clamp(0.64rem, 2.7vw, 0.92rem);
   font-weight: 950;
 }
 
@@ -680,7 +610,7 @@ button {
 }
 
 .game-header p {
-  margin: clamp(0.35rem, 0.9dvh, 0.68rem) 0 0;
+  margin: 1rem 0 0;
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 900;
@@ -692,7 +622,7 @@ button {
 .game-header h1 {
   margin-top: 0.2rem;
   color: var(--yellow);
-  font-size: clamp(2.75rem, 9dvh, 4.35rem);
+  font-size: clamp(3.6rem, 23vw, 6.2rem);
   line-height: 1;
   text-align: center;
 }
@@ -727,10 +657,8 @@ button {
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.35rem;
-  min-height: 1.35rem;
-  max-height: 1.7rem;
-  margin-top: clamp(0.38rem, 0.9dvh, 0.62rem);
-  overflow: hidden;
+  min-height: 1.7rem;
+  margin-top: 0.7rem;
 }
 
 .called-strip span {
@@ -752,15 +680,11 @@ button {
 .bingo-card {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-template-rows: 0.58fr repeat(5, minmax(0, 1fr));
-  gap: clamp(0.2rem, 0.72dvh, 0.38rem);
-  width: auto;
-  max-width: 100%;
-  height: 100%;
-  max-height: 100%;
-  aspect-ratio: 5 / 6;
+  gap: 0.42rem;
+  width: 100%;
+  max-width: 31rem;
   margin: 0 auto;
-  padding: clamp(0.36rem, 0.82dvh, 0.55rem);
+  padding: 0.58rem;
   border: 1px solid var(--line);
   border-radius: 0.95rem;
   background:
@@ -772,12 +696,14 @@ button {
 .card-cell {
   display: grid;
   place-items: center;
-  min-height: 0;
+  aspect-ratio: 1;
   border-radius: 0.58rem;
   font-weight: 950;
 }
 
 .card-head {
+  aspect-ratio: auto;
+  min-height: 1.8rem;
   color: var(--cyan);
   background: rgba(100, 228, 239, 0.1);
 }
@@ -786,7 +712,7 @@ button {
   color: #d9e4f6;
   border: 1px solid rgba(255, 255, 255, 0.07);
   background: var(--card);
-  font-size: clamp(0.82rem, 2.5dvh, 1.08rem);
+  font-size: clamp(0.9rem, 4vw, 1.2rem);
 }
 
 .card-cell.marked {
@@ -1086,7 +1012,7 @@ button {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.25rem;
   min-width: 0;
-  padding: 0.38rem 0.45rem calc(env(safe-area-inset-bottom) + 0.38rem);
+  padding: 0.45rem 0.45rem calc(env(safe-area-inset-bottom) + 0.45rem);
   border-top: 1px solid var(--line);
   background: rgba(6, 9, 18, 0.92);
   backdrop-filter: blur(18px);
@@ -1097,7 +1023,7 @@ button {
   place-items: center;
   gap: 0.14rem;
   min-width: 0;
-  min-height: 2.72rem;
+  min-height: 3rem;
   border-radius: 0.65rem;
   color: #697993;
   background: transparent;
@@ -1120,17 +1046,12 @@ button {
 
 @media (min-width: 540px) {
   .screen {
-    padding: 1rem 1.2rem 1.1rem;
+    padding: 1.2rem 1.2rem 1.4rem;
   }
 
   .seat-grid {
     grid-template-columns: repeat(10, minmax(0, 1fr));
     gap: 0.45rem;
-  }
-
-  .seat {
-    min-height: 2.05rem;
-    font-size: 0.78rem;
   }
 
   .bottom-nav {
@@ -1141,14 +1062,11 @@ button {
 
 @media (max-width: 390px) {
   .home-actions {
-    gap: 0.5rem;
+    grid-template-columns: 1fr;
   }
 
-  .primary-action,
-  .secondary-action,
-  .danger-action,
-  .win-action {
-    font-size: 0.82rem;
+  .hero-panel {
+    min-height: 17.8rem;
   }
 }
 
@@ -1163,34 +1081,5 @@ button {
 
   .metric {
     padding-inline: 0.25rem;
-  }
-}
-
-@media (max-height: 650px) {
-  .brand-copy span,
-  .home-mini-grid {
-    display: none;
-  }
-
-  .topbar {
-    padding-top: calc(env(safe-area-inset-top) + 0.42rem);
-    padding-bottom: 0.42rem;
-  }
-
-  .hero-panel h1 {
-    font-size: clamp(2.2rem, 6.8dvh, 3.2rem);
-  }
-
-  .metric span,
-  .timer-tile span {
-    font-size: 0.52rem;
-  }
-
-  .game-header h1 {
-    font-size: clamp(2.45rem, 8.2dvh, 3.75rem);
-  }
-
-  .bottom-nav button {
-    min-height: 2.45rem;
   }
 }

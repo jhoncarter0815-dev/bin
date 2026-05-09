@@ -2,8 +2,6 @@ import {
   Activity,
   BadgeDollarSign,
   Bot,
-  ChevronLeft,
-  ChevronRight,
   Crown,
   Grid3X3,
   History,
@@ -29,7 +27,6 @@ import { haptic, prepareTelegramShell } from "./telegram";
 
 type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
 const AUTO_BINGO_KEY = "bingo_auto_bingo";
-const SEATS_PER_PAGE = 40;
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -262,11 +259,7 @@ export function App() {
 
       <main className="screen">
         {loading && <BootScreen />}
-        {!loading && (
-          <div className="notice-slot">
-            {message && <div className="notice">{message}</div>}
-          </div>
-        )}
+        {!loading && message && <div className="notice">{message}</div>}
         {!loading && page === "home" && (
           <HomePage
             wallet={wallet}
@@ -424,29 +417,11 @@ function PlayPage({
   onSeat: (seatNumber: number) => void;
   onLeave: () => void;
 }) {
-  const pageCount = Math.max(1, Math.ceil(room.maxSeats / SEATS_PER_PAGE));
-  const [seatPage, setSeatPage] = useState(() =>
-    activeSeat ? Math.floor((activeSeat - 1) / SEATS_PER_PAGE) : 0,
-  );
   const occupied = new Map(room.seats.map((seat) => [seat.seatNumber, seat]));
   const pot = room.seats.length * room.entryFee;
-  const startSeat = seatPage * SEATS_PER_PAGE + 1;
-  const endSeat = Math.min(room.maxSeats, startSeat + SEATS_PER_PAGE - 1);
-  const visibleSeats = Array.from(
-    { length: endSeat - startSeat + 1 },
-    (_, index) => startSeat + index,
-  );
-
-  useEffect(() => {
-    setSeatPage((current) => Math.min(current, pageCount - 1));
-  }, [pageCount]);
-
-  useEffect(() => {
-    if (activeSeat) setSeatPage(Math.floor((activeSeat - 1) / SEATS_PER_PAGE));
-  }, [activeSeat]);
 
   return (
-    <section className="stack play-stack">
+    <section className="stack">
       <div className="panel room-panel">
         <div>
           <p className="eyebrow">Public Room</p>
@@ -482,33 +457,9 @@ function PlayPage({
             Leave
           </button>
         </div>
-        <div className="seat-range">
-          <button
-            className="icon-action"
-            aria-label="Previous seats"
-            title="Previous seats"
-            disabled={seatPage === 0}
-            onClick={() => setSeatPage((current) => Math.max(0, current - 1))}
-          >
-            <ChevronLeft size={17} />
-          </button>
-          <span>
-            {startSeat}-{endSeat}
-          </span>
-          <button
-            className="icon-action"
-            aria-label="Next seats"
-            title="Next seats"
-            disabled={seatPage >= pageCount - 1}
-            onClick={() =>
-              setSeatPage((current) => Math.min(pageCount - 1, current + 1))
-            }
-          >
-            <ChevronRight size={17} />
-          </button>
-        </div>
         <div className="seat-grid" aria-label="Seat grid">
-          {visibleSeats.map((seatNumber) => {
+          {Array.from({ length: room.maxSeats }, (_, index) => {
+            const seatNumber = index + 1;
             const seat = occupied.get(seatNumber);
             const mine = seat?.isMine;
             return (
@@ -654,7 +605,7 @@ function WalletPage({
   }, []);
 
   return (
-    <section className="stack data-stack">
+    <section className="stack">
       <div className="panel wallet-panel">
         <p className="eyebrow">Wallet</p>
         <h1>{wallet.balance} CR</h1>
@@ -683,7 +634,7 @@ function HistoryPage({
   }, []);
 
   return (
-    <section className="stack data-stack">
+    <section className="stack">
       <h2 className="section-title">Match Logs</h2>
       <ListEmpty items={history} text="No matches finished yet." />
       {history.map((item) => (
@@ -712,7 +663,7 @@ function ProfilePage({
   }, []);
 
   return (
-    <section className="stack data-stack">
+    <section className="stack">
       <div className="profile-grid">
         <Metric label="Matches" value={`${profile.totalMatches}`} />
         <Metric label="Wins" value={`${profile.wins}`} />

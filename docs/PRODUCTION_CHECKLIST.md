@@ -11,5 +11,5 @@
 - Configure Telegram webhook after deploy.
 - Put the API behind a proxy with TLS and request body limits.
 - Monitor process logs, 5xx rate, room start failures, and scheduler errors.
-- Review `PUBLIC_ENTRY_FEE`, `MIN_PLAYERS_TO_START`, and `DRAW_INTERVAL_MS`.
+- Review `PUBLIC_ENTRY_FEE`, `PUBLIC_ROOM_SECONDS`, and `DRAW_INTERVAL_MS`.
 - Keep this app as virtual credits only unless you add jurisdiction-specific compliance.
