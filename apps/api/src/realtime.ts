@@ -51,6 +51,14 @@ export function registerRealtime(
     socket.on("match:unsubscribe", (matchId: string) => {
       if (typeof matchId === "string") socket.leave(`match:${matchId}`);
     });
+
+    socket.on("spectator:subscribe", (matchId: string) => {
+      if (typeof matchId === "string") socket.join(`spectate:${matchId}`);
+    });
+
+    socket.on("spectator:unsubscribe", (matchId: string) => {
+      if (typeof matchId === "string") socket.leave(`spectate:${matchId}`);
+    });
   });
 
   return io;
@@ -62,6 +70,10 @@ export function emitRoom(roomId: string, payload: unknown): void {
 
 export function emitMatch(matchId: string, payload: unknown): void {
   io?.to(`match:${matchId}`).emit("match:state", payload);
+}
+
+export function emitSpectatorMatch(matchId: string, payload: unknown): void {
+  io?.to(`spectate:${matchId}`).emit("spectator:state", payload);
 }
 
 export function emitUser(

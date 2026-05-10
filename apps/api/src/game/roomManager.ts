@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { Prisma, type Room, type Seat, type User } from "@prisma/client";
 import { customAlphabet } from "nanoid";
-import { createCard, hasBingo } from "@bingo/shared";
+import { createCard, hasBingo, type MatchmakingStateDto } from "@bingo/shared";
 import { env } from "../config.js";
 import {
   ConflictError,
@@ -10,7 +10,12 @@ import {
   AppError,
 } from "../errors.js";
 import { prisma } from "../prisma.js";
-import { emitMatch, emitRoom, emitUser } from "../realtime.js";
+import {
+  emitMatch,
+  emitRoom,
+  emitSpectatorMatch,
+  emitUser,
+} from "../realtime.js";
 import {
   announceMatchFinished,
   announceMatchStarted,
@@ -27,6 +32,7 @@ import {
   toMatchDto,
   toResultDto,
   toRoomDto,
+  toSpectatorMatchDto,
   parseCard,
   parseNumberArray,
   parsePattern,
@@ -72,6 +78,113 @@ type ClaimBingoOptions = {
   markedNumbers?: number[];
 };
 
+export async function joinPublicMatchmaking(
+  userId: string,
+): Promise<MatchmakingStateDto> {
+  const activeMatch = await getActiveMatchForUser(userId);
+  if (activeMatch) {
+    await prisma.publicQueueEntry.deleteMany({ where: { userId } });
+    return withQueueMeta({ mode: "GAME", match: activeMatch });
+  }
+
+  const seatedRoom = await getWaitingPublicRoomForUser(userId);
+  if (seatedRoom) {
+    await prisma.publicQueueEntry.deleteMany({ where: { userId } });
+    return withQueueMeta({ mode: "ROOM", room: seatedRoom });
+  }
+
+  const assignedRoomId = await assignUserToAvailablePublicRoom(userId);
+  if (assignedRoomId) {
+    const room = await getRoom(assignedRoomId, userId);
+    await broadcastRoom(assignedRoomId, userId);
+    void announceRoomReady(assignedRoomId);
+    return withQueueMeta({ mode: "ROOM", room });
+  }
+
+  await assertCanPayEntryFee(userId);
+  await prisma.publicQueueEntry.upsert({
+    where: { userId },
+    create: { userId },
+    update: { updatedAt: new Date() },
+  });
+  await processPublicQueue();
+
+  return getPublicMatchmakingState(userId);
+}
+
+export async function getPublicMatchmakingState(
+  userId: string,
+): Promise<MatchmakingStateDto> {
+  const activeMatch = await getActiveMatchForUser(userId);
+  if (activeMatch) return withQueueMeta({ mode: "GAME", match: activeMatch });
+
+  const seatedRoom = await getWaitingPublicRoomForUser(userId);
+  if (seatedRoom) return withQueueMeta({ mode: "ROOM", room: seatedRoom });
+
+  const queue = await prisma.publicQueueEntry.findMany({
+    orderBy: { createdAt: "asc" },
+    select: { userId: true },
+  });
+  const queueIndex = queue.findIndex((entry) => entry.userId === userId);
+  const spectatorMatch = await getPublicSpectatorMatch();
+
+  return {
+    mode: spectatorMatch ? "SPECTATE" : "QUEUE",
+    spectatorMatch: spectatorMatch ?? undefined,
+    queuePosition: queueIndex >= 0 ? queueIndex + 1 : undefined,
+    queuedCount: queue.length,
+    minPlayers: publicMinPlayers(),
+    maxSeats: publicMaxSeats(),
+  };
+}
+
+export async function getPublicSpectatorMatch() {
+  const activeMatch = await prisma.match.findFirst({
+    where: {
+      status: "ACTIVE",
+      room: { type: "PUBLIC" },
+    },
+    orderBy: { startedAt: "desc" },
+    include: matchInclude,
+  });
+  if (activeMatch) return toSpectatorMatchDto(activeMatch);
+
+  const match = await prisma.match.findFirst({
+    where: {
+      status: "FINISHED",
+      finishedAt: { gte: new Date(Date.now() - 30_000) },
+      room: { type: "PUBLIC" },
+    },
+    orderBy: { finishedAt: "desc" },
+    include: matchInclude,
+  });
+  return match ? toSpectatorMatchDto(match) : null;
+}
+
+export async function processPublicQueue() {
+  const createdRooms: Array<{ roomId: string; userIds: string[] }> = [];
+
+  while (true) {
+    const created = await createPublicRoomFromQueue();
+    if (!created) break;
+    createdRooms.push(created);
+  }
+
+  for (const room of createdRooms) {
+    await notifyRoomAssigned(room.roomId, room.userIds);
+  }
+
+  if (createdRooms.length > 0) await emitQueueStates();
+
+  return {
+    roomsCreated: createdRooms.length,
+    queuedAssigned: createdRooms.reduce(
+      (total, room) => total + room.userIds.length,
+      0,
+    ),
+  };
+}
+
 export async function getOrCreatePublicRoom(userId?: string) {
   const existing = await prisma.room.findFirst({
     where: {
@@ -91,7 +204,7 @@ export async function getOrCreatePublicRoom(userId?: string) {
       type: "PUBLIC",
       status: "COUNTDOWN",
       entryFee: env.PUBLIC_ENTRY_FEE,
-      maxSeats: 200,
+      maxSeats: publicMaxSeats(),
       startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
     },
     include: roomInclude,
@@ -121,13 +234,325 @@ export async function getRoom(roomId: string, userId?: string) {
   return toRoomDto(room, userId);
 }
 
+async function getWaitingPublicRoomForUser(userId: string) {
+  const room = await prisma.room.findFirst({
+    where: {
+      type: "PUBLIC",
+      status: { in: ["OPEN", "COUNTDOWN"] },
+      seats: { some: { userId } },
+    },
+    orderBy: { startsAt: "asc" },
+    include: roomInclude,
+  });
+  return room ? toRoomDto(room, userId) : null;
+}
+
+async function assignUserToAvailablePublicRoom(
+  userId: string,
+): Promise<string | null> {
+  return prisma.$transaction(
+    async (tx) => {
+      const room = await tx.room.findFirst({
+        where: {
+          type: "PUBLIC",
+          status: { in: ["OPEN", "COUNTDOWN"] },
+        },
+        orderBy: [{ startsAt: "asc" }, { createdAt: "asc" }],
+        include: { seats: true },
+      });
+      if (!room || room.seats.length >= room.maxSeats) return null;
+
+      const existingSeat = room.seats.find((seat) => seat.userId === userId);
+      if (existingSeat) {
+        await tx.publicQueueEntry.deleteMany({ where: { userId } });
+        return room.id;
+      }
+
+      const seatNumber = firstAvailableSeat(room.maxSeats, room.seats);
+      await reservePublicSeat(tx, {
+        roomId: room.id,
+        roomCode: room.code,
+        entryFee: room.entryFee,
+        userId,
+        seatNumber,
+      });
+      await tx.publicQueueEntry.deleteMany({ where: { userId } });
+
+      if (
+        room.status === "OPEN" &&
+        room.seats.length + 1 >= publicMinPlayers()
+      ) {
+        await tx.room.update({
+          where: { id: room.id },
+          data: {
+            status: "COUNTDOWN",
+            startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
+          },
+        });
+      }
+
+      return room.id;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+}
+
+async function createPublicRoomFromQueue(): Promise<{
+  roomId: string;
+  userIds: string[];
+} | null> {
+  const minPlayers = publicMinPlayers();
+  const maxSeats = publicMaxSeats();
+
+  return prisma.$transaction(
+    async (tx) => {
+      const queued = await tx.publicQueueEntry.findMany({
+        orderBy: { createdAt: "asc" },
+        take: maxSeats,
+        include: { user: { include: { wallet: true } } },
+      });
+
+      const ineligible = queued.filter(
+        (entry) => (entry.user.wallet?.balance ?? 0) < env.PUBLIC_ENTRY_FEE,
+      );
+      if (ineligible.length > 0) {
+        await tx.publicQueueEntry.deleteMany({
+          where: { userId: { in: ineligible.map((entry) => entry.userId) } },
+        });
+      }
+
+      const players = queued
+        .filter(
+          (entry) => (entry.user.wallet?.balance ?? 0) >= env.PUBLIC_ENTRY_FEE,
+        )
+        .slice(0, maxSeats);
+
+      if (players.length < minPlayers) return null;
+
+      const room = await tx.room.create({
+        data: {
+          code: makeCode(),
+          type: "PUBLIC",
+          status: "COUNTDOWN",
+          entryFee: env.PUBLIC_ENTRY_FEE,
+          maxSeats,
+          startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
+        },
+      });
+
+      for (const [index, entry] of players.entries()) {
+        await reservePublicSeat(tx, {
+          roomId: room.id,
+          roomCode: room.code,
+          entryFee: room.entryFee,
+          userId: entry.userId,
+          seatNumber: index + 1,
+        });
+      }
+
+      const userIds = players.map((entry) => entry.userId);
+      await tx.publicQueueEntry.deleteMany({
+        where: { userId: { in: userIds } },
+      });
+
+      await logAudit(tx, {
+        action: "ROOM_CREATED",
+        target: roomTarget(room.id),
+        metadata: {
+          code: room.code,
+          type: room.type,
+          entryFee: room.entryFee,
+          maxSeats: room.maxSeats,
+          startsAt: room.startsAt.toISOString(),
+          queuedPlayers: userIds.length,
+        },
+      });
+
+      return { roomId: room.id, userIds };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+}
+
+async function dissolvePublicRoomToQueue(roomId: string): Promise<void> {
+  const result = await prisma.$transaction(
+    async (tx) => {
+      const room = await tx.room.findUnique({
+        where: { id: roomId },
+        include: { seats: true },
+      });
+      if (
+        !room ||
+        room.type !== "PUBLIC" ||
+        !["OPEN", "COUNTDOWN"].includes(room.status)
+      ) {
+        return null;
+      }
+
+      const userIds = room.seats.map((seat) => seat.userId);
+      for (const seat of room.seats) {
+        if (room.entryFee > 0) {
+          await refundEntryFee(tx, {
+            userId: seat.userId,
+            amount: room.entryFee,
+            roomId,
+            description: `Queue refund for room ${room.code}`,
+          });
+        }
+        await tx.publicQueueEntry.upsert({
+          where: { userId: seat.userId },
+          create: { userId: seat.userId },
+          update: { updatedAt: new Date() },
+        });
+      }
+
+      await tx.seat.deleteMany({ where: { roomId } });
+      await tx.room.update({
+        where: { id: roomId },
+        data: { status: "CANCELLED" },
+      });
+      await logAudit(tx, {
+        action: "ROOM_REQUEUED",
+        target: roomTarget(roomId),
+        metadata: {
+          code: room.code,
+          queuedPlayers: userIds.length,
+          reason: "below_minimum_players",
+        },
+      });
+      return { userIds };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+
+  await broadcastRoom(roomId);
+  if (result) {
+    await processPublicQueue();
+    await emitQueueStates();
+  }
+}
+
+async function reservePublicSeat(
+  tx: Prisma.TransactionClient,
+  input: {
+    roomId: string;
+    roomCode: string;
+    entryFee: number;
+    userId: string;
+    seatNumber: number;
+  },
+): Promise<void> {
+  if (input.entryFee > 0) {
+    await lockEntryFee(tx, {
+      userId: input.userId,
+      amount: input.entryFee,
+      roomId: input.roomId,
+      description: `Entry fee locked for room ${input.roomCode}`,
+      metadata: { seatNumber: input.seatNumber },
+    });
+  }
+
+  const card = createCard(secureRandomSource());
+  await tx.seat.create({
+    data: {
+      roomId: input.roomId,
+      userId: input.userId,
+      seatNumber: input.seatNumber,
+      card: card as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  await logAudit(tx, {
+    actorId: input.userId,
+    action: "SEAT_JOINED",
+    target: roomTarget(input.roomId),
+    metadata: {
+      seatNumber: input.seatNumber,
+      entryFee: input.entryFee,
+      cardHash: hashJson(card),
+    },
+  });
+}
+
+async function assertCanPayEntryFee(userId: string): Promise<void> {
+  if (env.PUBLIC_ENTRY_FEE <= 0) return;
+  const wallet = await prisma.wallet.findUnique({ where: { userId } });
+  if (!wallet) throw new AppError("Wallet not found", 404);
+  if (wallet.balance < env.PUBLIC_ENTRY_FEE) {
+    throw new AppError("Insufficient balance for public room entry", 402);
+  }
+}
+
+async function notifyRoomAssigned(
+  roomId: string,
+  userIds: string[],
+): Promise<void> {
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    include: roomInclude,
+  });
+  if (!room) return;
+
+  emitRoom(roomId, toRoomDto(room));
+  for (const userId of userIds) {
+    emitUser(userId, "room:state", toRoomDto(room, userId));
+    emitUser(userId, "queue:state", await getPublicMatchmakingState(userId));
+  }
+  void announceRoomReady(roomId);
+}
+
+async function emitQueueStates(): Promise<void> {
+  const queued = await prisma.publicQueueEntry.findMany({
+    orderBy: { createdAt: "asc" },
+    select: { userId: true },
+  });
+  for (const entry of queued) {
+    emitUser(
+      entry.userId,
+      "queue:state",
+      await getPublicMatchmakingState(entry.userId),
+    );
+  }
+}
+
+async function withQueueMeta(
+  state: Omit<MatchmakingStateDto, "queuedCount" | "minPlayers" | "maxSeats">,
+): Promise<MatchmakingStateDto> {
+  const queuedCount = await prisma.publicQueueEntry.count();
+  return {
+    ...state,
+    queuedCount,
+    minPlayers: publicMinPlayers(),
+    maxSeats: publicMaxSeats(),
+  };
+}
+
+function publicMinPlayers(): number {
+  return Math.max(1, Math.min(env.PUBLIC_ROOM_MIN_PLAYERS, publicMaxSeats()));
+}
+
+function publicMaxSeats(): number {
+  return Math.max(1, env.PUBLIC_ROOM_MAX_SEATS);
+}
+
+function firstAvailableSeat(
+  maxSeats: number,
+  seats: Array<{ seatNumber: number }>,
+): number {
+  const occupied = new Set(seats.map((seat) => seat.seatNumber));
+  for (let seatNumber = 1; seatNumber <= maxSeats; seatNumber += 1) {
+    if (!occupied.has(seatNumber)) return seatNumber;
+  }
+  throw new AppError("Room is full");
+}
+
 export async function joinSeat(
   roomId: string,
   userId: string,
   seatNumber: number,
 ) {
-  if (!Number.isInteger(seatNumber) || seatNumber < 1 || seatNumber > 200) {
-    throw new AppError("Seat must be between 1 and 200");
+  if (!Number.isInteger(seatNumber) || seatNumber < 1) {
+    throw new AppError("Seat must be a positive number");
   }
 
   await prisma.$transaction(
@@ -185,10 +610,16 @@ export async function joinSeat(
         },
       });
 
-      if (room.status === "OPEN") {
+      if (
+        room.status === "OPEN" &&
+        room.seats.length + 1 >= publicMinPlayers()
+      ) {
         await tx.room.update({
           where: { id: roomId },
-          data: { status: "COUNTDOWN" },
+          data: {
+            status: "COUNTDOWN",
+            startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
+          },
         });
       }
     },
@@ -234,6 +665,19 @@ export async function leaveRoom(roomId: string, userId: string) {
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
+
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    include: { seats: true },
+  });
+  if (
+    room?.type === "PUBLIC" &&
+    ["OPEN", "COUNTDOWN"].includes(room.status) &&
+    room.seats.length < publicMinPlayers()
+  ) {
+    await dissolvePublicRoomToQueue(roomId);
+    return;
+  }
 
   await broadcastRoom(roomId, userId);
 }
@@ -401,9 +845,10 @@ export async function forfeitActiveMatch(matchId: string, userId: string) {
 }
 
 export async function tickRooms() {
+  const matchmaking = await processPublicQueue();
   const started = await startDueRooms();
   const drawn = await drawDueMatches();
-  return { started, drawn };
+  return { ...matchmaking, started, drawn };
 }
 
 export async function startDueRooms() {
@@ -418,16 +863,8 @@ export async function startDueRooms() {
 
   let started = 0;
   for (const room of dueRooms) {
-    if (room.type === "PUBLIC" && room.seats.length === 0) {
-      // Keep empty public rooms open, but start any seated room as soon as its countdown ends.
-      await prisma.room.update({
-        where: { id: room.id },
-        data: {
-          status: "COUNTDOWN",
-          startsAt: new Date(Date.now() + env.PUBLIC_ROOM_SECONDS * 1000),
-        },
-      });
-      await broadcastRoom(room.id);
+    if (room.type === "PUBLIC" && room.seats.length < publicMinPlayers()) {
+      await dissolvePublicRoomToQueue(room.id);
       continue;
     }
     await startRoom(room);
@@ -861,6 +1298,7 @@ async function broadcastMatch(matchId: string) {
   });
   if (!match) return;
   emitMatch(matchId, toMatchDto(match));
+  emitSpectatorMatch(matchId, toSpectatorMatchDto(match));
   for (const seat of match.room.seats) {
     emitUser(seat.userId, "match:state", toMatchDto(match, seat.userId));
   }

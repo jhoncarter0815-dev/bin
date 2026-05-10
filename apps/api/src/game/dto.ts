@@ -6,10 +6,11 @@ import type {
   PublicUser,
   RoomDto,
   SeatDto,
+  SpectatorMatchDto,
   TransactionDto,
   WalletDto,
   WinPattern,
-  MatchWinnerDto
+  MatchWinnerDto,
 } from "@bingo/shared";
 
 type SeatWithUser = {
@@ -18,6 +19,7 @@ type SeatWithUser = {
   userId: string;
   seatNumber: number;
   card: Prisma.JsonValue;
+  status: "RESERVED" | "ACTIVE" | "FORFEIT";
   user: {
     username: string | null;
     firstName?: string | null;
@@ -79,14 +81,17 @@ export function toPublicUser(user: {
     firstName: user.firstName,
     lastName: user.lastName,
     photoUrl: user.photoUrl,
-    referralCode: user.referralCode
+    referralCode: user.referralCode,
   };
 }
 
-export function toWalletDto(wallet: { balance: number; locked: number }): WalletDto {
+export function toWalletDto(wallet: {
+  balance: number;
+  locked: number;
+}): WalletDto {
   return {
     balance: wallet.balance,
-    locked: wallet.locked
+    locked: wallet.locked,
   };
 }
 
@@ -99,7 +104,10 @@ export function toRoomDto(room: RoomWithSeats, userId?: string): RoomDto {
     entryFee: room.entryFee,
     maxSeats: room.maxSeats,
     startsAt: room.startsAt.toISOString(),
-    secondsRemaining: Math.max(0, Math.ceil((room.startsAt.getTime() - Date.now()) / 1000)),
+    secondsRemaining: Math.max(
+      0,
+      Math.ceil((room.startsAt.getTime() - Date.now()) / 1000),
+    ),
     seats: room.seats
       .sort((a, b) => a.seatNumber - b.seatNumber)
       .map((seat): SeatDto => {
@@ -111,9 +119,10 @@ export function toRoomDto(room: RoomWithSeats, userId?: string): RoomDto {
           seatNumber: seat.seatNumber,
           username: seat.user.username,
           card: isMine ? parseCard(seat.card) : undefined,
-          isMine
+          isMine,
+          status: seat.status,
         };
-      })
+      }),
   };
 }
 
@@ -140,7 +149,27 @@ export function toMatchDto(match: MatchWithRoom, userId?: string): MatchDto {
     myCard: mySeat ? parseCard(mySeat.card) : undefined,
     winnerSeat: match.winnerSeat,
     winnerUserId: match.winnerUserId,
-    winners
+    winners,
+  };
+}
+
+export function toSpectatorMatchDto(match: MatchWithRoom): SpectatorMatchDto {
+  const seats = match.room.seats
+    .sort((a, b) => a.seatNumber - b.seatNumber)
+    .map((seat) => ({
+      id: seat.id,
+      roomId: seat.roomId,
+      userId: seat.userId,
+      seatNumber: seat.seatNumber,
+      username: seat.user.username,
+      card: parseCard(seat.card),
+      status: seat.status,
+    }));
+
+  return {
+    ...toMatchDto(match),
+    seats,
+    remainingPlayers: seats.filter((seat) => seat.status !== "FORFEIT").length,
   };
 }
 
@@ -162,7 +191,10 @@ export function toResultDto(result: {
 }): MatchResultDto {
   const winnerSeats =
     result.match.results
-      ?.filter((item) => item.status === "WINNER" && typeof item.seatNumber === "number")
+      ?.filter(
+        (item) =>
+          item.status === "WINNER" && typeof item.seatNumber === "number",
+      )
       .map((item) => item.seatNumber!)
       .sort((a, b) => a - b) ?? [];
 
@@ -175,7 +207,7 @@ export function toResultDto(result: {
     winnerSeat: winnerSeats[0] ?? result.match.winnerSeat,
     winnerSeats,
     pot: result.pot,
-    createdAt: result.createdAt.toISOString()
+    createdAt: result.createdAt.toISOString(),
   };
 }
 
@@ -193,12 +225,14 @@ export function toTransactionDto(txn: {
     amount: txn.amount,
     balanceAfter: txn.balanceAfter,
     createdAt: txn.createdAt.toISOString(),
-    description: txn.description
+    description: txn.description,
   };
 }
 
 export function parseNumberArray(value: Prisma.JsonValue): number[] {
-  return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === "number")
+    : [];
 }
 
 export function parseCard(value: Prisma.JsonValue): BingoCard {
@@ -206,16 +240,21 @@ export function parseCard(value: Prisma.JsonValue): BingoCard {
 }
 
 export function parsePattern(pattern: string): WinPattern[] {
-  const values = pattern.split(",").map((value) => value.trim()) as WinPattern[];
+  const values = pattern
+    .split(",")
+    .map((value) => value.trim()) as WinPattern[];
   return values.filter((value) =>
-    ["ROW", "COLUMN", "DIAGONAL", "FOUR_CORNERS", "BLACKOUT"].includes(value)
+    ["ROW", "COLUMN", "DIAGONAL", "FOUR_CORNERS", "BLACKOUT"].includes(value),
   );
 }
 
 function toWinnerDtos(match: MatchWithRoom, userId?: string): MatchWinnerDto[] {
   const resultWinners =
     match.results
-      ?.filter((result) => result.status === "WINNER" && typeof result.seatNumber === "number")
+      ?.filter(
+        (result) =>
+          result.status === "WINNER" && typeof result.seatNumber === "number",
+      )
       .map((result) => ({
         userId: result.userId,
         username: result.user.username,
@@ -223,13 +262,16 @@ function toWinnerDtos(match: MatchWithRoom, userId?: string): MatchWinnerDto[] {
         lastName: result.user.lastName,
         seatNumber: result.seatNumber!,
         prize: result.pot,
-        isMine: result.userId === userId
+        isMine: result.userId === userId,
       })) ?? [];
 
-  if (resultWinners.length > 0) return resultWinners.sort((a, b) => a.seatNumber - b.seatNumber);
+  if (resultWinners.length > 0)
+    return resultWinners.sort((a, b) => a.seatNumber - b.seatNumber);
 
   if (!match.winnerUserId || typeof match.winnerSeat !== "number") return [];
-  const seat = match.room.seats.find((item) => item.userId === match.winnerUserId);
+  const seat = match.room.seats.find(
+    (item) => item.userId === match.winnerUserId,
+  );
   return [
     {
       userId: match.winnerUserId,
@@ -238,7 +280,7 @@ function toWinnerDtos(match: MatchWithRoom, userId?: string): MatchWinnerDto[] {
       lastName: seat?.user.lastName ?? null,
       seatNumber: match.winnerSeat,
       prize: match.prizePool,
-      isMine: match.winnerUserId === userId
-    }
+      isMine: match.winnerUserId === userId,
+    },
   ];
 }

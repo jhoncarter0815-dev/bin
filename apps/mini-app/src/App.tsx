@@ -15,9 +15,11 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   MatchDto,
+  MatchmakingStateDto,
   MatchResultDto,
   MatchWinnerDto,
   RoomDto,
+  SpectatorMatchDto,
   TransactionDto,
   WalletDto,
 } from "@bingo/shared";
@@ -61,6 +63,9 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [room, setRoom] = useState<RoomDto | null>(null);
   const [match, setMatch] = useState<MatchDto | null>(null);
+  const [matchmaking, setMatchmaking] = useState<MatchmakingStateDto | null>(
+    null,
+  );
   const [wallet, setWallet] = useState<WalletDto>({ balance: 0, locked: 0 });
   const [history, setHistory] = useState<MatchResultDto[]>([]);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
@@ -87,6 +92,7 @@ export function App() {
   const messageTimer = useRef<number | null>(null);
   const socketRef = useRef<BingoSocket | null>(null);
   const roomIdRef = useRef<string | null>(null);
+  const spectatorMatchIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     prepareTelegramShell();
@@ -99,6 +105,9 @@ export function App() {
     socketRef.current = socket;
     const subscribeToCurrentRoom = () => {
       if (roomIdRef.current) socket.emit("room:subscribe", roomIdRef.current);
+      if (spectatorMatchIdRef.current) {
+        socket.emit("spectator:subscribe", spectatorMatchIdRef.current);
+      }
     };
 
     socket.on("connect", subscribeToCurrentRoom);
@@ -109,8 +118,17 @@ export function App() {
     });
     socket.on("match:state", (nextMatch) => {
       setMatch(nextMatch);
+      setMatchmaking(null);
       if (nextMatch.status === "ACTIVE" || nextMatch.status === "FINISHED")
         setPage("game");
+    });
+    socket.on("queue:state", (state) => applyMatchmakingState(state));
+    socket.on("spectator:state", (nextSpectatorMatch) => {
+      setMatchmaking((current) =>
+        current?.spectatorMatch?.id === nextSpectatorMatch.id
+          ? { ...current, spectatorMatch: nextSpectatorMatch }
+          : current,
+      );
     });
     subscribeToCurrentRoom();
 
@@ -132,6 +150,18 @@ export function App() {
   }, [room?.id]);
 
   useEffect(() => {
+    const matchId = matchmaking?.spectatorMatch?.id ?? null;
+    spectatorMatchIdRef.current = matchId;
+    const socket = socketRef.current;
+    if (!socket || !matchId) return;
+
+    socket.emit("spectator:subscribe", matchId);
+    return () => {
+      socket.emit("spectator:unsubscribe", matchId);
+    };
+  }, [matchmaking?.spectatorMatch?.id]);
+
+  useEffect(() => {
     return () => {
       if (messageTimer.current) window.clearTimeout(messageTimer.current);
     };
@@ -141,16 +171,19 @@ export function App() {
     if (!session) return;
     const timer = window.setInterval(async () => {
       try {
-        const active = await endpoints.activeMatch();
-        if (active) setMatch(active);
-        if (room?.id && page === "play") setRoom(await endpoints.room(room.id));
+        if (page === "play") {
+          applyMatchmakingState(await endpoints.matchmakingState());
+        } else {
+          const active = await endpoints.activeMatch();
+          if (active) setMatch(active);
+        }
         setWallet(await endpoints.wallet());
       } catch {
         // Realtime is primary; polling is only a quiet safety net.
       }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [session, room?.id, page]);
+  }, [session, page]);
 
   useEffect(() => {
     if (!match || match.status !== "FINISHED" || match.winners.length === 0)
@@ -222,10 +255,7 @@ export function App() {
 
   async function openPublicRoom() {
     await runAction(async () => {
-      const nextRoom = await endpoints.currentRoom();
-      setRoom(nextRoom);
-      setMatch(null);
-      setPage("play");
+      applyMatchmakingState(await endpoints.joinMatchmaking());
     });
   }
 
@@ -233,12 +263,9 @@ export function App() {
     setWinnerDialog(null);
     setProofDialog(null);
     await runAction(async () => {
-      const nextRoom = await endpoints.currentRoom();
-      setRoom(nextRoom);
-      setMatch(null);
-      setPage("play");
+      applyMatchmakingState(await endpoints.joinMatchmaking());
       setWallet(await endpoints.wallet());
-    }, "Next room ready");
+    });
   }
 
   async function joinSeat(seatNumber: number) {
@@ -255,6 +282,7 @@ export function App() {
     await runAction(async () => {
       await endpoints.leaveRoom(room.id);
       setRoom(null);
+      setMatchmaking(null);
       setPage("home");
       setWallet(await endpoints.wallet());
     }, "Seat released");
@@ -265,6 +293,7 @@ export function App() {
       const practice = await endpoints.startPractice();
       setMatch(practice);
       setRoom(null);
+      setMatchmaking(null);
       setPage("game");
     });
   }
@@ -325,6 +354,7 @@ export function App() {
     await runAction(async () => {
       await endpoints.exitMatch(match.id);
       setMatch(null);
+      setMatchmaking(null);
       setPage("home");
       await refreshAccount();
     }, "Match exited");
@@ -369,6 +399,27 @@ export function App() {
         timeoutMs: 5000,
       });
     }
+  }
+
+  function applyMatchmakingState(state: MatchmakingStateDto) {
+    setMatchmaking(state);
+    if (state.mode === "GAME" && state.match) {
+      setMatch(state.match);
+      setRoom(null);
+      setPage("game");
+      return;
+    }
+
+    if (state.mode === "ROOM" && state.room) {
+      setRoom(state.room);
+      setMatch(null);
+      setPage("play");
+      return;
+    }
+
+    setRoom(null);
+    setMatch(null);
+    setPage("play");
   }
 
   function showMessage(
@@ -429,6 +480,9 @@ export function App() {
             onSeat={joinSeat}
             onLeave={leaveCurrentRoom}
           />
+        )}
+        {!loading && page === "play" && !room && matchmaking && (
+          <MatchmakingPage state={matchmaking} onRefresh={openPublicRoom} />
         )}
         {!loading && page === "game" && match && (
           <GamePage
@@ -660,7 +714,7 @@ function PlayPage({
               <button
                 key={seatNumber}
                 className={`seat ${mine ? "mine" : seat ? "taken" : ""}`}
-                disabled={Boolean(seat && !mine)}
+                disabled={Boolean((seat && !mine) || (activeSeat && !mine))}
                 onClick={() => onSeat(seatNumber)}
                 title={seat ? (seat.username ?? "Taken") : `Seat ${seatNumber}`}
               >
@@ -671,6 +725,135 @@ function PlayPage({
         </div>
       </div>
     </section>
+  );
+}
+
+function MatchmakingPage({
+  state,
+  onRefresh,
+}: {
+  state: MatchmakingStateDto;
+  onRefresh: () => void;
+}) {
+  const needed = Math.max(0, state.minPlayers - state.queuedCount);
+
+  return (
+    <section className="stack">
+      <div className="panel queue-panel">
+        <div>
+          <p className="eyebrow">
+            {state.mode === "SPECTATE" ? "Spectating" : "Queue"}
+          </p>
+          <h2>
+            {state.queuePosition
+              ? `Queue #${state.queuePosition}`
+              : "Finding Match"}
+          </h2>
+          <p>
+            {needed > 0
+              ? `${needed} more player${needed === 1 ? "" : "s"} needed to open the next room.`
+              : "The next room is being prepared."}
+          </p>
+        </div>
+        <button className="text-action" onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="compact-stats">
+        <Metric label="Queued" value={`${state.queuedCount}`} tone="cyan" />
+        <Metric label="Minimum" value={`${state.minPlayers}`} tone="green" />
+        <Metric label="Room Size" value={`${state.maxSeats}`} tone="gold" />
+      </div>
+
+      {state.spectatorMatch ? (
+        <SpectatorMatchPanel match={state.spectatorMatch} />
+      ) : (
+        <div className="empty-state">
+          Waiting for more players. Keep this screen open and you will move into
+          a room automatically.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SpectatorMatchPanel({ match }: { match: SpectatorMatchDto }) {
+  const called = new Set(match.calledNumbers);
+  const current = match.currentNumber ? formatBall(match.currentNumber) : "...";
+  const winnersSummary = match.winners
+    .map((winner) => `Seat ${winner.seatNumber}`)
+    .join(", ");
+
+  return (
+    <div className="panel spectator-panel">
+      <div className="spectator-head">
+        <div>
+          <p className="eyebrow">Live Room {match.roomCode}</p>
+          <h2>{match.status === "ACTIVE" ? current : "Finished"}</h2>
+        </div>
+        <div className="timer-tile">
+          <strong>{match.remainingPlayers}</strong>
+          <span>Players</span>
+        </div>
+      </div>
+
+      <div className="draw-progress">
+        <span>{match.currentIndex}</span>
+        <div>
+          <i
+            style={{
+              width: `${Math.min(100, (match.currentIndex / Math.max(1, match.totalNumbers)) * 100)}%`,
+            }}
+          />
+        </div>
+        <span>{match.totalNumbers}</span>
+      </div>
+
+      <div className="called-strip spectator-called">
+        {match.calledNumbers.slice(-8).map((value) => (
+          <span key={value}>{formatBall(value)}</span>
+        ))}
+      </div>
+
+      {winnersSummary && (
+        <div className="result-strip">
+          <Crown size={18} />
+          <span>Winner: {winnersSummary}</span>
+        </div>
+      )}
+
+      <div className="spectator-board-grid">
+        {match.seats.map((seat) => (
+          <div
+            className={`spectator-board ${seat.status === "FORFEIT" ? "forfeit" : ""}`}
+            key={seat.id}
+          >
+            <div className="spectator-seat-head">
+              <strong>Seat {seat.seatNumber}</strong>
+              <span>{seat.username ? `@${seat.username}` : "Player"}</span>
+            </div>
+            <div className="mini-bingo-card">
+              {BINGO_LETTERS.map((letter) => (
+                <div className="mini-card-head" key={letter}>
+                  {letter}
+                </div>
+              ))}
+              {seat.card.flat().map((cell) => (
+                <div
+                  className={`mini-card-cell ${
+                    isMarked(cell, called) ? "marked" : ""
+                  }`}
+                  key={`${seat.id}-${cell.row}-${cell.col}`}
+                >
+                  {cell.value}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import type {
   MatchDto,
+  MatchmakingStateDto,
   MatchResultDto,
   PublicUser,
   RoomDto,
@@ -67,6 +68,11 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
 export const endpoints = {
   me: () => api<Session>("/api/me"),
   currentRoom: () => api<RoomDto>("/api/rooms/current"),
+  matchmakingState: () => api<MatchmakingStateDto>("/api/matchmaking/state"),
+  joinMatchmaking: () =>
+    api<MatchmakingStateDto>("/api/matchmaking/join", {
+      method: "POST",
+    }),
   room: (id: string) => api<RoomDto>(`/api/rooms/${id}`),
   joinSeat: (roomId: string, seatNumber: number) =>
     api<RoomDto>(`/api/rooms/${roomId}/join-seat`, {

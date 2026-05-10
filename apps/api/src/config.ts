@@ -43,6 +43,8 @@ const schema = z.object({
     .transform((value) => value === "true")
     .default("false"),
   PUBLIC_ROOM_SECONDS: z.coerce.number().int().positive().default(30),
+  PUBLIC_ROOM_MIN_PLAYERS: z.coerce.number().int().positive().default(2),
+  PUBLIC_ROOM_MAX_SEATS: z.coerce.number().int().positive().default(200),
   DRAW_INTERVAL_MS: z.coerce.number().int().positive().default(2500),
   PUBLIC_ENTRY_FEE: z.coerce.number().int().nonnegative().default(50),
   STARTING_CREDITS: z.coerce.number().int().nonnegative().default(1000),

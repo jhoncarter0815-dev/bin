@@ -39,6 +39,7 @@ export type SeatDto = {
   username?: string | null;
   card?: BingoCard;
   isMine?: boolean;
+  status?: "RESERVED" | "ACTIVE" | "FORFEIT";
 };
 
 export type RoomStatus =
@@ -91,6 +92,22 @@ export type MatchDto = {
   winnerSeat?: number | null;
   winnerUserId?: string | null;
   winners: MatchWinnerDto[];
+};
+
+export type SpectatorMatchDto = Omit<MatchDto, "mySeat" | "myCard"> & {
+  seats: Array<SeatDto & { card: BingoCard }>;
+  remainingPlayers: number;
+};
+
+export type MatchmakingStateDto = {
+  mode: "GAME" | "ROOM" | "QUEUE" | "SPECTATE";
+  match?: MatchDto;
+  room?: RoomDto;
+  spectatorMatch?: SpectatorMatchDto;
+  queuePosition?: number;
+  queuedCount: number;
+  minPlayers: number;
+  maxSeats: number;
 };
 
 export type MatchResultDto = {

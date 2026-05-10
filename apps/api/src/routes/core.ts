@@ -10,8 +10,11 @@ import {
   getFairProof,
   getHistory,
   getOrCreatePublicRoom,
+  getPublicMatchmakingState,
+  getPublicSpectatorMatch,
   getRoom,
   joinSeat,
+  joinPublicMatchmaking,
   leaveRoom,
   startPractice,
 } from "../game/roomManager.js";
@@ -42,6 +45,30 @@ export async function registerCoreRoutes(
     { preHandler: fastify.authenticate },
     async (request) => {
       return getOrCreatePublicRoom(request.user!.id);
+    },
+  );
+
+  fastify.get(
+    "/api/matchmaking/state",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      return getPublicMatchmakingState(request.user!.id);
+    },
+  );
+
+  fastify.post(
+    "/api/matchmaking/join",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      return joinPublicMatchmaking(request.user!.id);
+    },
+  );
+
+  fastify.get(
+    "/api/spectate/current",
+    { preHandler: fastify.authenticate },
+    async () => {
+      return getPublicSpectatorMatch();
     },
   );
 

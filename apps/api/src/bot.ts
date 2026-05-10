@@ -91,14 +91,21 @@ bot.action("admin:stats", async (ctx) => {
   if (!(await requireAdminCallback(ctx))) return;
   await ctx.answerCbQuery();
 
-  const [userCount, openRooms, activeMatches, walletTotals, txnCount] =
-    await Promise.all([
-      prisma.user.count(),
-      prisma.room.count({ where: { status: { in: ["OPEN", "COUNTDOWN"] } } }),
-      prisma.match.count({ where: { status: "ACTIVE" } }),
-      prisma.wallet.aggregate({ _sum: { balance: true, locked: true } }),
-      prisma.transaction.count(),
-    ]);
+  const [
+    userCount,
+    openRooms,
+    activeMatches,
+    queuedPlayers,
+    walletTotals,
+    txnCount,
+  ] = await Promise.all([
+    prisma.user.count(),
+    prisma.room.count({ where: { status: { in: ["OPEN", "COUNTDOWN"] } } }),
+    prisma.match.count({ where: { status: "ACTIVE" } }),
+    prisma.publicQueueEntry.count(),
+    prisma.wallet.aggregate({ _sum: { balance: true, locked: true } }),
+    prisma.transaction.count(),
+  ]);
 
   await ctx.reply(
     [
@@ -106,6 +113,7 @@ bot.action("admin:stats", async (ctx) => {
       `Users: ${userCount}`,
       `Open/countdown rooms: ${openRooms}`,
       `Active matches: ${activeMatches}`,
+      `Queued players: ${queuedPlayers}`,
       `Wallet balance total: ${walletTotals._sum.balance ?? 0} credits`,
       `Locked balance total: ${walletTotals._sum.locked ?? 0} credits`,
       `Transactions: ${txnCount}`,
