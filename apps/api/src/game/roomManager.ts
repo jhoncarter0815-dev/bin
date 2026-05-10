@@ -162,6 +162,10 @@ export async function getPublicSpectatorMatch() {
 }
 
 export async function processPublicQueue() {
+  if (await isMatchmakingPaused()) {
+    return { roomsCreated: 0, queuedAssigned: 0, paused: true };
+  }
+
   const createdRooms: Array<{ roomId: string; userIds: string[] }> = [];
 
   while (true) {
@@ -182,7 +186,81 @@ export async function processPublicQueue() {
       (total, room) => total + room.userIds.length,
       0,
     ),
+    paused: false,
   };
+}
+
+export async function forceCreatePublicRoomFromQueue() {
+  if (await isMatchmakingPaused()) {
+    throw new AppError("Matchmaking is paused");
+  }
+
+  const created = await createPublicRoomFromQueue({ force: true });
+  if (!created) return { roomsCreated: 0, queuedAssigned: 0 };
+
+  await notifyRoomAssigned(created.roomId, created.userIds);
+  await emitQueueStates();
+  return { roomsCreated: 1, queuedAssigned: created.userIds.length };
+}
+
+export async function forceStartPublicRoom(roomCode: string) {
+  const room = await prisma.room.findUnique({
+    where: { code: normalizeRoomCode(roomCode) },
+    include: { seats: true },
+  });
+  if (!room) throw new NotFoundError("Room not found");
+  if (room.type !== "PUBLIC") throw new AppError("Only public rooms can start");
+  if (!["OPEN", "COUNTDOWN"].includes(room.status)) {
+    throw new ConflictError("Room is not waiting for players");
+  }
+  if (room.seats.length === 0) throw new AppError("Room has no players");
+
+  await startRoom(room);
+  return getRoom(room.id);
+}
+
+export async function requeuePublicRoom(roomCode: string) {
+  const room = await prisma.room.findUnique({
+    where: { code: normalizeRoomCode(roomCode) },
+    include: { seats: true },
+  });
+  if (!room) throw new NotFoundError("Room not found");
+  if (room.type !== "PUBLIC")
+    throw new AppError("Only public rooms can requeue");
+  if (!["OPEN", "COUNTDOWN"].includes(room.status)) {
+    throw new ConflictError("Only waiting rooms can be requeued");
+  }
+
+  await dissolvePublicRoomToQueue(room.id);
+  return { queued: room.seats.length };
+}
+
+export async function removeUserFromPublicQueue(userId: string) {
+  const deleted = await prisma.publicQueueEntry.deleteMany({
+    where: { userId },
+  });
+  await emitQueueStates();
+  return { removed: deleted.count };
+}
+
+export async function setMatchmakingPaused(paused: boolean, actorId?: string) {
+  await logAudit(prisma, {
+    actorId,
+    action: "MATCHMAKING_STATUS",
+    target: "matchmaking:public",
+    metadata: { paused },
+  });
+  await emitQueueStates();
+  return { paused };
+}
+
+export async function isMatchmakingPaused(): Promise<boolean> {
+  const latest = await prisma.auditLog.findFirst({
+    where: { action: "MATCHMAKING_STATUS", target: "matchmaking:public" },
+    orderBy: { createdAt: "desc" },
+    select: { metadata: true },
+  });
+  return metadataFlag(latest?.metadata, "paused");
 }
 
 export async function getOrCreatePublicRoom(userId?: string) {
@@ -297,7 +375,9 @@ async function assignUserToAvailablePublicRoom(
   );
 }
 
-async function createPublicRoomFromQueue(): Promise<{
+async function createPublicRoomFromQueue(
+  options: { force?: boolean } = {},
+): Promise<{
   roomId: string;
   userIds: string[];
 } | null> {
@@ -327,7 +407,7 @@ async function createPublicRoomFromQueue(): Promise<{
         )
         .slice(0, maxSeats);
 
-      if (players.length < minPlayers) return null;
+      if (players.length < (options.force ? 1 : minPlayers)) return null;
 
       const room = await tx.room.create({
         data: {
@@ -544,6 +624,17 @@ function firstAvailableSeat(
     if (!occupied.has(seatNumber)) return seatNumber;
   }
   throw new AppError("Room is full");
+}
+
+function normalizeRoomCode(roomCode: string): string {
+  return roomCode.trim().toUpperCase();
+}
+
+function metadataFlag(metadata: Prisma.JsonValue | undefined, key: string) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return false;
+  }
+  return metadata[key] === true;
 }
 
 export async function joinSeat(

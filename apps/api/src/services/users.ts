@@ -1,4 +1,4 @@
-import { env } from "../config.js";
+import { env, isConfiguredAdminTelegramId } from "../config.js";
 import { prisma } from "../prisma.js";
 import type { TelegramUserPayload } from "../auth/telegram.js";
 import { creditWallet } from "./wallet.js";
@@ -10,6 +10,7 @@ export async function upsertTelegramUser(
 ) {
   const telegramId = BigInt(payload.id);
   const userReferralCode = referralCodeForTelegramId(telegramId);
+  const isConfiguredAdmin = isConfiguredAdminTelegramId(telegramId);
 
   const user = await prisma.user.upsert({
     where: { telegramId },
@@ -20,6 +21,7 @@ export async function upsertTelegramUser(
       lastName: payload.last_name,
       photoUrl: payload.photo_url,
       referralCode: userReferralCode,
+      isAdmin: isConfiguredAdmin,
       wallet: {
         create: {
           balance: env.STARTING_CREDITS,
@@ -32,6 +34,7 @@ export async function upsertTelegramUser(
       lastName: payload.last_name,
       photoUrl: payload.photo_url,
       referralCode: userReferralCode,
+      ...(isConfiguredAdmin ? { isAdmin: true } : {}),
     },
     include: {
       wallet: true,

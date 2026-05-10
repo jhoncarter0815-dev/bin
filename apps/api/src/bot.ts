@@ -1,8 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { Markup, Telegraf, type Context } from "telegraf";
-import { env, miniAppUrl } from "./config.js";
-import { tickRooms } from "./game/roomManager.js";
+import { env, isConfiguredAdminTelegramId, miniAppUrl } from "./config.js";
+import {
+  forceCreatePublicRoomFromQueue,
+  forceStartPublicRoom,
+  isMatchmakingPaused,
+  removeUserFromPublicQueue,
+  requeuePublicRoom,
+  setMatchmakingPaused,
+  tickRooms,
+} from "./game/roomManager.js";
 import { prisma } from "./prisma.js";
+import { creditWallet, debitWallet } from "./services/wallet.js";
 
 export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
@@ -55,6 +64,66 @@ bot.command("admin", async (ctx) => {
     );
   }
   return sendAdminMenu(ctx);
+});
+
+bot.command("admin_help", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await replyAdminHelp(ctx);
+});
+
+bot.command("credit", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await adjustUserCredits(ctx, "credit");
+});
+
+bot.command("debit", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await adjustUserCredits(ctx, "debit");
+});
+
+bot.command("ban", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await setUserBan(ctx, true);
+});
+
+bot.command("unban", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await setUserBan(ctx, false);
+});
+
+bot.command("kick_queue", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await kickQueuedUser(ctx);
+});
+
+bot.command("broadcast", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await broadcastToUsers(ctx);
+});
+
+bot.command("force_room", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await forceRoomFromQueue(ctx);
+});
+
+bot.command("force_start", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await forceStartRoomCommand(ctx);
+});
+
+bot.command("requeue_room", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await requeueRoomCommand(ctx);
+});
+
+bot.command("matchmaking", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await matchmakingCommand(ctx);
+});
+
+bot.command("settings", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await replyAdminSettings(ctx);
 });
 
 bot.help(async (ctx) => {
@@ -120,6 +189,24 @@ bot.action("admin:stats", async (ctx) => {
     ].join("\n"),
     adminMenuKeyboard(),
   );
+});
+
+bot.action("admin:help", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await replyAdminHelp(ctx);
+});
+
+bot.action("admin:queue", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await replyQueueSnapshot(ctx);
+});
+
+bot.action("admin:settings", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await replyAdminSettings(ctx);
 });
 
 bot.action("admin:rooms", async (ctx) => {
@@ -191,13 +278,43 @@ bot.action("admin:transactions", async (ctx) => {
   );
 });
 
+bot.action("admin:force_room", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await forceRoomFromQueue(ctx);
+});
+
 bot.action("admin:tick", async (ctx) => {
   if (!(await requireAdminCallback(ctx))) return;
   await ctx.answerCbQuery();
 
   const result = await tickRooms();
   await ctx.reply(
-    `Room tick complete.\nStarted rooms: ${result.started}\nDrawn matches: ${result.drawn}`,
+    `Room tick complete.\nCreated rooms: ${result.roomsCreated}\nQueued assigned: ${result.queuedAssigned}\nStarted rooms: ${result.started}\nDrawn matches: ${result.drawn}${result.paused ? "\nMatchmaking: paused" : ""}`,
+    adminMenuKeyboard(),
+  );
+});
+
+bot.action("admin:matchmaking", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await replyMatchmakingStatus(ctx);
+});
+
+bot.action("admin:pause_matchmaking", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await setMatchmakingPaused(true, await adminActorId(ctx));
+  await ctx.reply("Matchmaking paused.", adminMenuKeyboard());
+});
+
+bot.action("admin:resume_matchmaking", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await setMatchmakingPaused(false, await adminActorId(ctx));
+  const result = await tickRooms();
+  await ctx.reply(
+    `Matchmaking resumed.\nCreated rooms: ${result.roomsCreated}\nQueued assigned: ${result.queuedAssigned}`,
     adminMenuKeyboard(),
   );
 });
@@ -335,6 +452,314 @@ async function replyInvite(ctx: Context): Promise<void> {
   );
 }
 
+async function replyAdminHelp(ctx: Context): Promise<void> {
+  await ctx.reply(
+    [
+      "Admin command help",
+      "/admin - open admin menu",
+      "/admin_help - show this help",
+      "/settings - show current Railway-driven settings",
+      "/matchmaking status|pause|resume",
+      "/force_room - create a room from queued players",
+      "/force_start ROOMCODE - start a waiting room now",
+      "/requeue_room ROOMCODE - cancel a waiting room and requeue players",
+      "/kick_queue USER - remove a user from queue",
+      "/credit USER AMOUNT reason - add credits",
+      "/debit USER AMOUNT reason - remove credits",
+      "/ban USER reason - ban user",
+      "/unban USER - unban user",
+      "/broadcast message - send message to all unbanned users",
+      "",
+      "USER can be a Telegram numeric ID, @username, or app user ID.",
+    ].join("\n"),
+    adminMenuKeyboard(),
+  );
+}
+
+async function replyQueueSnapshot(ctx: Context): Promise<void> {
+  const queued = await prisma.publicQueueEntry.findMany({
+    orderBy: { createdAt: "asc" },
+    take: 15,
+    include: {
+      user: {
+        include: { wallet: true },
+      },
+    },
+  });
+
+  const paused = await isMatchmakingPaused();
+  await ctx.reply(
+    queued.length
+      ? [
+          `Public queue (${paused ? "paused" : "running"})`,
+          ...queued.map((entry, index) => {
+            const waitSeconds = Math.max(
+              0,
+              Math.floor((Date.now() - entry.createdAt.getTime()) / 1000),
+            );
+            return `${index + 1}. ${displayUser(entry.user)} balance=${entry.user.wallet?.balance ?? 0} wait=${waitSeconds}s`;
+          }),
+        ].join("\n")
+      : `Public queue is empty. Matchmaking is ${paused ? "paused" : "running"}.`,
+    adminMenuKeyboard(),
+  );
+}
+
+async function replyAdminSettings(ctx: Context): Promise<void> {
+  await ctx.reply(
+    [
+      "Admin settings",
+      `Admins from Railway: ${env.ADMIN_TELEGRAM_IDS.length}`,
+      `PUBLIC_ROOM_MIN_PLAYERS=${env.PUBLIC_ROOM_MIN_PLAYERS}`,
+      `PUBLIC_ROOM_MAX_SEATS=${env.PUBLIC_ROOM_MAX_SEATS}`,
+      `PUBLIC_ROOM_SECONDS=${env.PUBLIC_ROOM_SECONDS}`,
+      `PUBLIC_ENTRY_FEE=${env.PUBLIC_ENTRY_FEE}`,
+      `DRAW_INTERVAL_MS=${env.DRAW_INTERVAL_MS}`,
+      "",
+      "Change these in Railway variables, then redeploy/restart.",
+      "Use ADMIN_TELEGRAM_IDS as a comma-separated list of numeric Telegram IDs.",
+    ].join("\n"),
+    adminMenuKeyboard(),
+  );
+}
+
+async function replyMatchmakingStatus(ctx: Context): Promise<void> {
+  const paused = await isMatchmakingPaused();
+  const queued = await prisma.publicQueueEntry.count();
+  const waitingRooms = await prisma.room.count({
+    where: { type: "PUBLIC", status: { in: ["OPEN", "COUNTDOWN"] } },
+  });
+  const activeMatches = await prisma.match.count({
+    where: { status: "ACTIVE", room: { type: "PUBLIC" } },
+  });
+
+  await ctx.reply(
+    [
+      "Matchmaking",
+      `Status: ${paused ? "paused" : "running"}`,
+      `Queued players: ${queued}`,
+      `Waiting rooms: ${waitingRooms}`,
+      `Active public matches: ${activeMatches}`,
+    ].join("\n"),
+    matchmakingKeyboard(paused),
+  );
+}
+
+async function forceRoomFromQueue(ctx: Context): Promise<void> {
+  try {
+    const result = await forceCreatePublicRoomFromQueue();
+    await ctx.reply(
+      result.roomsCreated
+        ? `Created ${result.roomsCreated} room from ${result.queuedAssigned} queued player(s).`
+        : "No queued players available to create a room.",
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function forceStartRoomCommand(ctx: Context): Promise<void> {
+  const [roomCode] = commandArgs(ctx);
+  if (!roomCode) {
+    await ctx.reply("Usage: /force_start ROOMCODE", adminMenuKeyboard());
+    return;
+  }
+
+  try {
+    const room = await forceStartPublicRoom(roomCode);
+    await ctx.reply(`Started room ${room.code}.`, adminMenuKeyboard());
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function requeueRoomCommand(ctx: Context): Promise<void> {
+  const [roomCode] = commandArgs(ctx);
+  if (!roomCode) {
+    await ctx.reply("Usage: /requeue_room ROOMCODE", adminMenuKeyboard());
+    return;
+  }
+
+  try {
+    const result = await requeuePublicRoom(roomCode);
+    await ctx.reply(
+      `Requeued room ${roomCode.toUpperCase()}. Players moved back to queue: ${result.queued}`,
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function matchmakingCommand(ctx: Context): Promise<void> {
+  const [action] = commandArgs(ctx);
+  const actorId = await adminActorId(ctx);
+
+  if (action === "pause") {
+    await setMatchmakingPaused(true, actorId);
+    await ctx.reply("Matchmaking paused.", adminMenuKeyboard());
+    return;
+  }
+  if (action === "resume") {
+    await setMatchmakingPaused(false, actorId);
+    const result = await tickRooms();
+    await ctx.reply(
+      `Matchmaking resumed.\nCreated rooms: ${result.roomsCreated}\nQueued assigned: ${result.queuedAssigned}`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  await replyMatchmakingStatus(ctx);
+}
+
+async function adjustUserCredits(
+  ctx: Context,
+  direction: "credit" | "debit",
+): Promise<void> {
+  const [target, amountRaw, ...reasonParts] = commandArgs(ctx);
+  const amount = Number(amountRaw);
+  if (!target || !Number.isInteger(amount) || amount <= 0) {
+    await ctx.reply(
+      `Usage: /${direction} USER AMOUNT reason`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  const reason =
+    reasonParts.join(" ").trim() || `Admin ${direction} via Telegram bot`;
+  try {
+    const user = await findUserByAdminTarget(target);
+    if (!user) throw new Error("User not found");
+    const wallet = await prisma.$transaction((tx) =>
+      direction === "credit"
+        ? creditWallet(tx, {
+            userId: user.id,
+            amount,
+            type: "ADMIN_ADJUSTMENT",
+            description: reason,
+            metadata: adminMetadata(ctx),
+          })
+        : debitWallet(tx, {
+            userId: user.id,
+            amount,
+            type: "ADMIN_ADJUSTMENT",
+            description: reason,
+            metadata: adminMetadata(ctx),
+          }),
+    );
+
+    await ctx.reply(
+      `${direction === "credit" ? "Credited" : "Debited"} ${amount} credits for ${displayUser(user)}.\nBalance: ${wallet.balance}`,
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function setUserBan(ctx: Context, banned: boolean): Promise<void> {
+  const [target, ...reasonParts] = commandArgs(ctx);
+  if (!target) {
+    await ctx.reply(
+      `Usage: /${banned ? "ban" : "unban"} USER reason`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  try {
+    const user = await findUserByAdminTarget(target);
+    if (!user) throw new Error("User not found");
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { isBanned: banned },
+      include: { wallet: true },
+    });
+    if (banned) await removeUserFromPublicQueue(user.id);
+    await prisma.auditLog.create({
+      data: {
+        actorId: await adminActorId(ctx),
+        action: banned ? "USER_BANNED" : "USER_UNBANNED",
+        target: `user:${user.id}`,
+        metadata: {
+          reason: reasonParts.join(" ").trim() || null,
+          adminTelegramId: ctx.from?.id ?? null,
+        },
+      },
+    });
+    await ctx.reply(
+      `${displayUser(updated)} is now ${banned ? "banned" : "unbanned"}.`,
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function kickQueuedUser(ctx: Context): Promise<void> {
+  const [target] = commandArgs(ctx);
+  if (!target) {
+    await ctx.reply("Usage: /kick_queue USER", adminMenuKeyboard());
+    return;
+  }
+
+  try {
+    const user = await findUserByAdminTarget(target);
+    if (!user) throw new Error("User not found");
+    const result = await removeUserFromPublicQueue(user.id);
+    await ctx.reply(
+      result.removed
+        ? `Removed ${displayUser(user)} from queue.`
+        : `${displayUser(user)} was not in queue.`,
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function broadcastToUsers(ctx: Context): Promise<void> {
+  const text = commandRemainder(ctx);
+  if (!text) {
+    await ctx.reply("Usage: /broadcast message", adminMenuKeyboard());
+    return;
+  }
+
+  const users = await prisma.user.findMany({
+    where: { isBanned: false },
+    select: { telegramId: true },
+  });
+  let sent = 0;
+  let failed = 0;
+
+  for (const user of users) {
+    try {
+      await bot.telegram.sendMessage(user.telegramId.toString(), text);
+      sent += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: await adminActorId(ctx),
+      action: "ADMIN_BROADCAST",
+      target: "telegram:users",
+      metadata: {
+        adminTelegramId: ctx.from?.id ?? null,
+        sent,
+        failed,
+      },
+    },
+  });
+
+  await ctx.reply(`Broadcast complete. Sent: ${sent}. Failed: ${failed}.`);
+}
+
 function mainMenuKeyboard(
   options: {
     includeAdmin?: boolean;
@@ -369,17 +794,47 @@ function adminMenuKeyboard() {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback("Stats", "admin:stats"),
+      Markup.button.callback("Queue", "admin:queue"),
+    ],
+    [
       Markup.button.callback("Rooms", "admin:rooms"),
-    ],
-    [
       Markup.button.callback("Users", "admin:users"),
-      Markup.button.callback("Transactions", "admin:transactions"),
     ],
     [
+      Markup.button.callback("Transactions", "admin:transactions"),
+      Markup.button.callback("Settings", "admin:settings"),
+    ],
+    [
+      Markup.button.callback("Force Queue Room", "admin:force_room"),
       Markup.button.callback("Run Room Tick", "admin:tick"),
+    ],
+    [
+      Markup.button.callback("Matchmaking", "admin:matchmaking"),
       Markup.button.callback("Pin Public Menu", "admin:pin_menu"),
     ],
+    [Markup.button.callback("Command Help", "admin:help")],
     [Markup.button.webApp("Open Game", miniAppUrl())],
+  ]);
+}
+
+function matchmakingKeyboard(paused: boolean) {
+  return Markup.inlineKeyboard([
+    [
+      paused
+        ? Markup.button.callback(
+            "Resume Matchmaking",
+            "admin:resume_matchmaking",
+          )
+        : Markup.button.callback(
+            "Pause Matchmaking",
+            "admin:pause_matchmaking",
+          ),
+    ],
+    [
+      Markup.button.callback("Queue", "admin:queue"),
+      Markup.button.callback("Force Queue Room", "admin:force_room"),
+    ],
+    [Markup.button.callback("Back", "admin:menu")],
   ]);
 }
 
@@ -407,6 +862,15 @@ function supportContactUrl(): string | undefined {
 async function isAdminContext(ctx: Context): Promise<boolean> {
   const telegramId = ctx.from?.id;
   if (!telegramId) return false;
+  if (isConfiguredAdminTelegramId(telegramId)) {
+    await prisma.user
+      .update({
+        where: { telegramId: BigInt(telegramId) },
+        data: { isAdmin: true },
+      })
+      .catch(() => undefined);
+    return true;
+  }
   const user = await prisma.user.findUnique({
     where: { telegramId: BigInt(telegramId) },
     select: { isAdmin: true },
@@ -430,8 +894,81 @@ async function requireAdminCallback(ctx: Context): Promise<boolean> {
   return false;
 }
 
+async function requireAdminMessage(ctx: Context): Promise<boolean> {
+  if (!isPrivateChat(ctx)) {
+    await ctx.reply(
+      "Admin tools are available in a private chat with the bot.",
+    );
+    return false;
+  }
+  if (await isAdminContext(ctx)) return true;
+  await ctx.reply("Admin only.");
+  return false;
+}
+
 function isPrivateChat(ctx: Context): boolean {
   return ctx.chat?.type === "private";
+}
+
+async function adminActorId(ctx: Context): Promise<string | undefined> {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return undefined;
+  const user = await prisma.user.findUnique({
+    where: { telegramId: BigInt(telegramId) },
+    select: { id: true },
+  });
+  return user?.id;
+}
+
+function commandArgs(ctx: Context): string[] {
+  const text = messageText(ctx).trim();
+  if (!text) return [];
+  return text.split(/\s+/).slice(1);
+}
+
+function commandRemainder(ctx: Context): string {
+  return messageText(ctx)
+    .replace(/^\/[^\s]+(?:\s+)?/, "")
+    .trim();
+}
+
+function messageText(ctx: Context): string {
+  return (ctx.message as { text?: string } | undefined)?.text ?? "";
+}
+
+function adminMetadata(ctx: Context) {
+  return {
+    source: "telegram_admin_bot",
+    adminTelegramId: ctx.from?.id ?? null,
+  };
+}
+
+async function findUserByAdminTarget(target: string) {
+  const value = target.trim();
+  if (!value) return null;
+
+  if (value.startsWith("@")) {
+    return prisma.user.findFirst({
+      where: { username: value.slice(1) },
+      include: { wallet: true },
+    });
+  }
+
+  if (/^-?\d+$/.test(value)) {
+    return prisma.user.findUnique({
+      where: { telegramId: BigInt(value) },
+      include: { wallet: true },
+    });
+  }
+
+  return prisma.user.findUnique({
+    where: { id: value },
+    include: { wallet: true },
+  });
+}
+
+function adminError(error: unknown): string {
+  return error instanceof Error ? error.message : "Admin action failed";
 }
 
 async function pinMessage(ctx: Context, messageId: number): Promise<void> {

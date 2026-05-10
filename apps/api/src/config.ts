@@ -10,6 +10,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(24),
   ADMIN_SECRET: z.string().min(16),
+  ADMIN_TELEGRAM_IDS: z.string().optional().default(""),
   TELEGRAM_BOT_TOKEN: z.string().min(8),
   TELEGRAM_BOT_USERNAME: z.string().optional().default(""),
   TELEGRAM_ANNOUNCE_CHAT_ID: z
@@ -62,6 +63,9 @@ if (!parsed.success) {
 
 export const env = {
   ...parsed.data,
+  ADMIN_TELEGRAM_IDS: parsed.data.ADMIN_TELEGRAM_IDS.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
   CORS_ORIGINS: parsed.data.CORS_ORIGINS.split(",")
     .map((origin) => origin.trim())
     .filter(Boolean),
@@ -69,4 +73,10 @@ export const env = {
 
 export function miniAppUrl(): string {
   return env.PUBLIC_APP_URL || env.MINI_APP_DEV_URL;
+}
+
+export function isConfiguredAdminTelegramId(
+  telegramId: bigint | number | string,
+): boolean {
+  return env.ADMIN_TELEGRAM_IDS.includes(String(telegramId));
 }
