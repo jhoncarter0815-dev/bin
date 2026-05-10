@@ -19,6 +19,8 @@ const schema = z.object({
     .or(z.literal(""))
     .default(""),
   SUPPORT_CONTACT: z.string().optional().or(z.literal("")).default(""),
+  DEPOSIT_INSTRUCTIONS: z.string().optional().or(z.literal("")).default(""),
+  WITHDRAW_INSTRUCTIONS: z.string().optional().or(z.literal("")).default(""),
   TELEGRAM_WEBHOOK_URL: z
     .string()
     .url()

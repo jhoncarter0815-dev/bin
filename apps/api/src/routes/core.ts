@@ -18,8 +18,17 @@ import {
   leaveRoom,
   startPractice,
 } from "../game/roomManager.js";
-import { toTransactionDto, toWalletDto } from "../game/dto.js";
+import {
+  toTransactionDto,
+  toWalletDto,
+  toWalletRequestDto,
+} from "../game/dto.js";
 import { prisma } from "../prisma.js";
+import {
+  cancelWalletRequest,
+  createWalletRequest,
+  listWalletRequests,
+} from "../services/walletRequests.js";
 
 const seatBodySchema = z.object({
   seatNumber: z.coerce.number().int().positive(),
@@ -30,6 +39,11 @@ const bingoClaimBodySchema = z.object({
     .array(z.coerce.number().int().min(1).max(BINGO_MAX_BALL))
     .max(BINGO_MAX_BALL)
     .optional(),
+});
+
+const walletRequestBodySchema = z.object({
+  amount: z.coerce.number().int().positive(),
+  details: z.string().max(500).optional(),
 });
 
 export async function registerCoreRoutes(
@@ -222,6 +236,58 @@ export async function registerCoreRoutes(
         where: { userId: request.user!.id },
       });
       return toWalletDto(wallet);
+    },
+  );
+
+  fastify.get(
+    "/api/wallet/requests",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      const requests = await listWalletRequests(request.user!.id);
+      return requests.map(toWalletRequestDto);
+    },
+  );
+
+  fastify.post(
+    "/api/wallet/deposit",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      const body = walletRequestBodySchema.parse(request.body ?? {});
+      const walletRequest = await createWalletRequest({
+        userId: request.user!.id,
+        type: "DEPOSIT",
+        amount: body.amount,
+        details: body.details,
+      });
+      return toWalletRequestDto(walletRequest);
+    },
+  );
+
+  fastify.post(
+    "/api/wallet/withdraw",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      const body = walletRequestBodySchema.parse(request.body ?? {});
+      const walletRequest = await createWalletRequest({
+        userId: request.user!.id,
+        type: "WITHDRAW",
+        amount: body.amount,
+        details: body.details,
+      });
+      return toWalletRequestDto(walletRequest);
+    },
+  );
+
+  fastify.post(
+    "/api/wallet/requests/:id/cancel",
+    { preHandler: fastify.authenticate },
+    async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const walletRequest = await cancelWalletRequest({
+        requestId: params.id,
+        userId: request.user!.id,
+      });
+      return toWalletRequestDto(walletRequest);
     },
   );
 

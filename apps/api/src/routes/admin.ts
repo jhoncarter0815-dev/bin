@@ -3,15 +3,30 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { env } from "../config.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
+import { toWalletRequestDto } from "../game/dto.js";
 import { prisma } from "../prisma.js";
 import { creditWallet, debitWallet } from "../services/wallet.js";
+import {
+  approveWalletRequest,
+  rejectWalletRequest,
+} from "../services/walletRequests.js";
 
 const creditBodySchema = z.object({
   amount: z.coerce.number().int(),
-  reason: z.string().max(200).optional()
+  reason: z.string().max(200).optional(),
 });
 
-export async function registerAdminRoutes(fastify: FastifyInstance): Promise<void> {
+const walletRequestQuerySchema = z.object({
+  status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional(),
+});
+
+const walletRequestActionBodySchema = z.object({
+  note: z.string().max(500).optional(),
+});
+
+export async function registerAdminRoutes(
+  fastify: FastifyInstance,
+): Promise<void> {
   fastify.addHook("preHandler", async (request) => {
     if (request.url.startsWith("/api/admin")) assertAdminSecret(request);
   });
@@ -20,7 +35,7 @@ export async function registerAdminRoutes(fastify: FastifyInstance): Promise<voi
     const users = await prisma.user.findMany({
       orderBy: { createdAt: "desc" },
       take: 200,
-      include: { wallet: true }
+      include: { wallet: true },
     });
 
     return users.map((user) => ({
@@ -31,8 +46,10 @@ export async function registerAdminRoutes(fastify: FastifyInstance): Promise<voi
       lastName: user.lastName,
       isAdmin: user.isAdmin,
       isBanned: user.isBanned,
-      wallet: user.wallet ? { balance: user.wallet.balance, locked: user.wallet.locked } : null,
-      createdAt: user.createdAt.toISOString()
+      wallet: user.wallet
+        ? { balance: user.wallet.balance, locked: user.wallet.locked }
+        : null,
+      createdAt: user.createdAt.toISOString(),
     }));
   });
 
@@ -47,10 +64,10 @@ export async function registerAdminRoutes(fastify: FastifyInstance): Promise<voi
             id: true,
             status: true,
             winnerSeat: true,
-            prizePool: true
-          }
-        }
-      }
+            prizePool: true,
+          },
+        },
+      },
     });
   });
 
@@ -67,7 +84,7 @@ export async function registerAdminRoutes(fastify: FastifyInstance): Promise<voi
           amount: body.amount,
           type: "ADMIN_ADJUSTMENT",
           description: body.reason ?? "Admin credit adjustment",
-          metadata: { reason: body.reason ?? null } as Prisma.InputJsonValue
+          metadata: { reason: body.reason ?? null } as Prisma.InputJsonValue,
         });
       } else {
         await debitWallet(tx, {
@@ -75,17 +92,78 @@ export async function registerAdminRoutes(fastify: FastifyInstance): Promise<voi
           amount: Math.abs(body.amount),
           type: "ADMIN_ADJUSTMENT",
           description: body.reason ?? "Admin debit adjustment",
-          metadata: { reason: body.reason ?? null } as Prisma.InputJsonValue
+          metadata: { reason: body.reason ?? null } as Prisma.InputJsonValue,
         });
       }
     });
 
     return { ok: true };
   });
+
+  fastify.get("/api/admin/wallet-requests", async (request) => {
+    const query = walletRequestQuerySchema.parse(request.query);
+    const requests = await prisma.walletRequest.findMany({
+      where: query.status ? { status: query.status } : undefined,
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: {
+        user: {
+          select: {
+            id: true,
+            telegramId: true,
+            username: true,
+            firstName: true,
+            lastName: true,
+            wallet: true,
+          },
+        },
+      },
+    });
+
+    return requests.map((walletRequest) => ({
+      ...toWalletRequestDto(walletRequest),
+      user: {
+        id: walletRequest.user.id,
+        telegramId: walletRequest.user.telegramId.toString(),
+        username: walletRequest.user.username,
+        firstName: walletRequest.user.firstName,
+        lastName: walletRequest.user.lastName,
+        wallet: walletRequest.user.wallet
+          ? {
+              balance: walletRequest.user.wallet.balance,
+              locked: walletRequest.user.wallet.locked,
+            }
+          : null,
+      },
+    }));
+  });
+
+  fastify.post("/api/admin/wallet-requests/:id/approve", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = walletRequestActionBodySchema.parse(request.body ?? {});
+    const result = await approveWalletRequest({
+      requestId: params.id,
+      adminNote: body.note,
+    });
+    return {
+      request: toWalletRequestDto(result.request),
+      wallet: { balance: result.wallet.balance, locked: result.wallet.locked },
+    };
+  });
+
+  fastify.post("/api/admin/wallet-requests/:id/reject", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = walletRequestActionBodySchema.parse(request.body ?? {});
+    const walletRequest = await rejectWalletRequest({
+      requestId: params.id,
+      adminNote: body.note,
+    });
+    return toWalletRequestDto(walletRequest);
+  });
 }
 
 function assertAdminSecret(request: FastifyRequest): void {
   const secret = request.headers["x-admin-secret"];
-  if (secret !== env.ADMIN_SECRET) throw new ForbiddenError("Invalid admin secret");
+  if (secret !== env.ADMIN_SECRET)
+    throw new ForbiddenError("Invalid admin secret");
 }
-

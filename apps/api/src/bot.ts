@@ -12,6 +12,11 @@ import {
 } from "./game/roomManager.js";
 import { prisma } from "./prisma.js";
 import { creditWallet, debitWallet } from "./services/wallet.js";
+import {
+  approveWalletRequest,
+  listPendingWalletRequests,
+  rejectWalletRequest,
+} from "./services/walletRequests.js";
 
 export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
@@ -20,6 +25,9 @@ const MAIN_MENU_TEXT =
 const ADMIN_MENU_TEXT =
   "Admin tools\nUse these controls to inspect the live bot and run safe operational actions.";
 const RECENT_PIN_WINDOW_MS = 6 * 60 * 60 * 1000;
+type PendingWalletRequest = Awaited<
+  ReturnType<typeof listPendingWalletRequests>
+>[number];
 
 bot.start(async (ctx) => {
   const referralCode = referralFromStartPayload(ctx);
@@ -79,6 +87,16 @@ bot.command("credit", async (ctx) => {
 bot.command("debit", async (ctx) => {
   if (!(await requireAdminMessage(ctx))) return;
   await adjustUserCredits(ctx, "debit");
+});
+
+bot.command("approve_wallet", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await resolveWalletRequestCommand(ctx, "approve");
+});
+
+bot.command("reject_wallet", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await resolveWalletRequestCommand(ctx, "reject");
 });
 
 bot.command("ban", async (ctx) => {
@@ -166,6 +184,7 @@ bot.action("admin:stats", async (ctx) => {
     activeMatches,
     queuedPlayers,
     walletTotals,
+    pendingWalletRequests,
     txnCount,
   ] = await Promise.all([
     prisma.user.count(),
@@ -173,6 +192,7 @@ bot.action("admin:stats", async (ctx) => {
     prisma.match.count({ where: { status: "ACTIVE" } }),
     prisma.publicQueueEntry.count(),
     prisma.wallet.aggregate({ _sum: { balance: true, locked: true } }),
+    prisma.walletRequest.count({ where: { status: "PENDING" } }),
     prisma.transaction.count(),
   ]);
 
@@ -183,6 +203,7 @@ bot.action("admin:stats", async (ctx) => {
       `Open/countdown rooms: ${openRooms}`,
       `Active matches: ${activeMatches}`,
       `Queued players: ${queuedPlayers}`,
+      `Pending wallet requests: ${pendingWalletRequests}`,
       `Wallet balance total: ${walletTotals._sum.balance ?? 0} credits`,
       `Locked balance total: ${walletTotals._sum.locked ?? 0} credits`,
       `Transactions: ${txnCount}`,
@@ -276,6 +297,24 @@ bot.action("admin:transactions", async (ctx) => {
       : "No transactions yet.",
     adminMenuKeyboard(),
   );
+});
+
+bot.action("admin:wallet_requests", async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await replyPendingWalletRequests(ctx);
+});
+
+bot.action(/^admin:wallet_approve:(.+)$/, async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await resolveWalletRequestCallback(ctx, "approve", ctx.match[1] ?? "");
+});
+
+bot.action(/^admin:wallet_reject:(.+)$/, async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await resolveWalletRequestCallback(ctx, "reject", ctx.match[1] ?? "");
 });
 
 bot.action("admin:force_room", async (ctx) => {
@@ -402,7 +441,10 @@ async function replyDeposit(ctx: Context): Promise<void> {
   await ctx.reply(
     [
       "Deposit",
-      "Send support the amount you want to add and your Telegram username. An admin will confirm the payment and credit your wallet.",
+      walletInstruction(
+        env.DEPOSIT_INSTRUCTIONS,
+        "Open the Mini App Wallet tab, submit a deposit request, and add your payment proof or note. An admin will confirm it and credit your wallet.",
+      ),
       supportContactText(),
     ].join("\n"),
     supportKeyboard(),
@@ -413,7 +455,10 @@ async function replyWithdraw(ctx: Context): Promise<void> {
   await ctx.reply(
     [
       "Withdraw",
-      "Send support your username, amount, and payout details. An admin will verify the available balance before approving it.",
+      walletInstruction(
+        env.WITHDRAW_INSTRUCTIONS,
+        "Open the Mini App Wallet tab, submit a withdrawal request, and add your payout details. An admin will verify your available balance before approving it.",
+      ),
       supportContactText(),
     ].join("\n"),
     supportKeyboard(),
@@ -466,6 +511,8 @@ async function replyAdminHelp(ctx: Context): Promise<void> {
       "/kick_queue USER - remove a user from queue",
       "/credit USER AMOUNT reason - add credits",
       "/debit USER AMOUNT reason - remove credits",
+      "/approve_wallet REQUEST_ID note - approve deposit/withdraw request",
+      "/reject_wallet REQUEST_ID note - reject deposit/withdraw request",
       "/ban USER reason - ban user",
       "/unban USER - unban user",
       "/broadcast message - send message to all unbanned users",
@@ -542,6 +589,101 @@ async function replyMatchmakingStatus(ctx: Context): Promise<void> {
       `Active public matches: ${activeMatches}`,
     ].join("\n"),
     matchmakingKeyboard(paused),
+  );
+}
+
+async function replyPendingWalletRequests(ctx: Context): Promise<void> {
+  const requests = await listPendingWalletRequests();
+  await ctx.reply(
+    requests.length
+      ? [
+          "Pending wallet requests",
+          ...requests.map(formatWalletRequestLine),
+          "",
+          "Use /approve_wallet REQUEST_ID note or /reject_wallet REQUEST_ID note.",
+        ].join("\n")
+      : "No pending wallet requests.",
+    walletRequestsKeyboard(requests),
+  );
+}
+
+async function resolveWalletRequestCommand(
+  ctx: Context,
+  decision: "approve" | "reject",
+): Promise<void> {
+  const [target, ...noteParts] = commandArgs(ctx);
+  if (!target) {
+    await ctx.reply(
+      `Usage: /${decision}_wallet REQUEST_ID note`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  try {
+    const requestId = await resolveWalletRequestId(target);
+    await resolveWalletRequest(ctx, decision, requestId, noteParts.join(" "));
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function resolveWalletRequestCallback(
+  ctx: Context,
+  decision: "approve" | "reject",
+  requestId: string,
+): Promise<void> {
+  try {
+    await resolveWalletRequest(
+      ctx,
+      decision,
+      requestId,
+      "Resolved from admin menu",
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function resolveWalletRequest(
+  ctx: Context,
+  decision: "approve" | "reject",
+  requestId: string,
+  note: string,
+): Promise<void> {
+  const adminId = await adminActorId(ctx);
+  const adminNote = note.trim() || undefined;
+  if (decision === "approve") {
+    const result = await approveWalletRequest({
+      requestId,
+      adminId,
+      adminNote,
+    });
+    const request = await prisma.walletRequest.findUniqueOrThrow({
+      where: { id: result.request.id },
+      include: { user: { include: { wallet: true } } },
+    });
+    await notifyWalletRequestUser(request.id);
+    await ctx.reply(
+      `Approved ${request.type.toLowerCase()} request ${shortRequestId(request.id)} for ${displayUser(request.user)}.\nAmount: ${request.amount} credits\nBalance: ${result.wallet.balance}`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  const request = await rejectWalletRequest({
+    requestId,
+    adminId,
+    adminNote,
+  });
+  const fullRequest = await prisma.walletRequest.findUniqueOrThrow({
+    where: { id: request.id },
+    include: { user: { include: { wallet: true } } },
+  });
+  await notifyWalletRequestUser(fullRequest.id);
+  await ctx.reply(
+    `Rejected ${fullRequest.type.toLowerCase()} request ${shortRequestId(fullRequest.id)} for ${displayUser(fullRequest.user)}.`,
+    adminMenuKeyboard(),
   );
 }
 
@@ -802,12 +944,13 @@ function adminMenuKeyboard() {
     ],
     [
       Markup.button.callback("Transactions", "admin:transactions"),
-      Markup.button.callback("Settings", "admin:settings"),
+      Markup.button.callback("Wallet Requests", "admin:wallet_requests"),
     ],
     [
+      Markup.button.callback("Settings", "admin:settings"),
       Markup.button.callback("Force Queue Room", "admin:force_room"),
-      Markup.button.callback("Run Room Tick", "admin:tick"),
     ],
+    [Markup.button.callback("Run Room Tick", "admin:tick")],
     [
       Markup.button.callback("Matchmaking", "admin:matchmaking"),
       Markup.button.callback("Pin Public Menu", "admin:pin_menu"),
@@ -815,6 +958,23 @@ function adminMenuKeyboard() {
     [Markup.button.callback("Command Help", "admin:help")],
     [Markup.button.webApp("Open Game", miniAppUrl())],
   ]);
+}
+
+function walletRequestsKeyboard(requests: PendingWalletRequest[]) {
+  const rows = requests
+    .slice(0, 8)
+    .map((request) => [
+      Markup.button.callback(
+        `Approve ${shortRequestId(request.id)}`,
+        `admin:wallet_approve:${request.id}`,
+      ),
+      Markup.button.callback(
+        `Reject ${shortRequestId(request.id)}`,
+        `admin:wallet_reject:${request.id}`,
+      ),
+    ]);
+  rows.push([Markup.button.callback("Back", "admin:menu")]);
+  return Markup.inlineKeyboard(rows);
 }
 
 function matchmakingKeyboard(paused: boolean) {
@@ -848,6 +1008,10 @@ function supportContactText(): string {
   const contact = env.SUPPORT_CONTACT.trim();
   if (!contact) return "Support contact is not configured yet.";
   return `Support: ${contact}`;
+}
+
+function walletInstruction(configured: string, fallback: string): string {
+  return configured.trim() || fallback;
 }
 
 function supportContactUrl(): string | undefined {
@@ -965,6 +1129,47 @@ async function findUserByAdminTarget(target: string) {
     where: { id: value },
     include: { wallet: true },
   });
+}
+
+async function resolveWalletRequestId(target: string): Promise<string> {
+  const value = target.trim().replace(/^#/, "");
+  if (!value) throw new Error("Wallet request ID is required");
+
+  const exact = await prisma.walletRequest.findUnique({
+    where: { id: value },
+    select: { id: true },
+  });
+  if (exact) return exact.id;
+
+  const matches = await prisma.walletRequest.findMany({
+    where: { id: { startsWith: value } },
+    select: { id: true },
+    take: 2,
+  });
+  if (matches.length === 1 && matches[0]) return matches[0].id;
+  if (matches.length > 1) throw new Error("Wallet request ID is ambiguous");
+  throw new Error("Wallet request not found");
+}
+
+async function notifyWalletRequestUser(requestId: string): Promise<void> {
+  const request = await prisma.walletRequest.findUnique({
+    where: { id: requestId },
+    include: {
+      user: { select: { telegramId: true } },
+    },
+  });
+  if (!request) return;
+
+  const action = request.type === "DEPOSIT" ? "Deposit" : "Withdrawal";
+  const lines = [
+    `${action} request ${request.status.toLowerCase()}`,
+    `Amount: ${request.amount} credits`,
+  ];
+  if (request.adminNote) lines.push(`Note: ${request.adminNote}`);
+
+  await bot.telegram
+    .sendMessage(request.user.telegramId.toString(), lines.join("\n"))
+    .catch(() => undefined);
 }
 
 function adminError(error: unknown): string {
@@ -1093,6 +1298,24 @@ function formatTransactionLine(transaction: {
   };
 }): string {
   return `${formatDate(transaction.createdAt)} ${displayUser(transaction.user)} ${transaction.type} ${transaction.amount} balance=${transaction.balanceAfter}`;
+}
+
+function formatWalletRequestLine(request: PendingWalletRequest): string {
+  const balance = request.user.wallet?.balance ?? 0;
+  const detail = request.details
+    ? ` note=${truncateText(request.details, 42)}`
+    : "";
+  return `${shortRequestId(request.id)} ${request.type.toLowerCase()} ${request.amount} credits ${displayUser(request.user)} balance=${balance}${detail}`;
+}
+
+function shortRequestId(requestId: string): string {
+  return `#${requestId.slice(0, 8)}`;
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength
+    ? `${value.slice(0, maxLength - 1)}...`
+    : value;
 }
 
 function displayUser(user: {

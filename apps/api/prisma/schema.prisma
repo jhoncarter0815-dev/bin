@@ -36,11 +36,25 @@ enum SeatStatus {
 enum TransactionType {
   CREDIT
   DEBIT
+  DEPOSIT
+  WITHDRAWAL
   ENTRY_FEE
   REFUND
   WIN_PAYOUT
   REFERRAL_BONUS
   ADMIN_ADJUSTMENT
+}
+
+enum WalletRequestType {
+  DEPOSIT
+  WITHDRAW
+}
+
+enum WalletRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }
 
 enum PlayerResultStatus {
@@ -51,26 +65,28 @@ enum PlayerResultStatus {
 }
 
 model User {
-  id             String            @id @default(cuid())
-  telegramId     BigInt            @unique
-  username       String?
-  firstName      String?
-  lastName       String?
-  photoUrl       String?
-  referralCode   String?           @unique
-  isAdmin        Boolean           @default(false)
-  isBanned       Boolean           @default(false)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  wallet         Wallet?
-  seats          Seat[]
-  wins           Match[]           @relation("Winner")
-  results        PlayerResult[]
-  txns           Transaction[]
-  auditLogs      AuditLog[]
-  referralsMade  Referral[]        @relation("ReferralReferrer")
-  referralSource Referral?         @relation("ReferralReferred")
-  queueEntry     PublicQueueEntry?
+  id                     String            @id @default(cuid())
+  telegramId             BigInt            @unique
+  username               String?
+  firstName              String?
+  lastName               String?
+  photoUrl               String?
+  referralCode           String?           @unique
+  isAdmin                Boolean           @default(false)
+  isBanned               Boolean           @default(false)
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  wallet                 Wallet?
+  seats                  Seat[]
+  wins                   Match[]           @relation("Winner")
+  results                PlayerResult[]
+  txns                   Transaction[]
+  auditLogs              AuditLog[]
+  referralsMade          Referral[]        @relation("ReferralReferrer")
+  referralSource         Referral?         @relation("ReferralReferred")
+  queueEntry             PublicQueueEntry?
+  walletRequests         WalletRequest[]   @relation("WalletRequestUser")
+  reviewedWalletRequests WalletRequest[]   @relation("WalletRequestAdmin")
 
   @@index([createdAt])
 }
@@ -104,6 +120,26 @@ model Wallet {
   locked    Int      @default(0)
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WalletRequest {
+  id         String              @id @default(cuid())
+  userId     String
+  type       WalletRequestType
+  status     WalletRequestStatus @default(PENDING)
+  amount     Int
+  details    String?
+  adminNote  String?
+  adminId    String?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  resolvedAt DateTime?
+  user       User                @relation("WalletRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  admin      User?               @relation("WalletRequestAdmin", fields: [adminId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([type, status])
 }
 
 model Room {

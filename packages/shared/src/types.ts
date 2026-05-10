@@ -31,6 +31,26 @@ export type WalletDto = {
   locked: number;
 };
 
+export type WalletRequestType = "DEPOSIT" | "WITHDRAW";
+
+export type WalletRequestStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export type WalletRequestDto = {
+  id: string;
+  type: WalletRequestType;
+  status: WalletRequestStatus;
+  amount: number;
+  details?: string | null;
+  adminNote?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string | null;
+};
+
 export type SeatDto = {
   id: string;
   roomId: string;

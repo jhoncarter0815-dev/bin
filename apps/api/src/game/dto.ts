@@ -9,6 +9,7 @@ import type {
   SpectatorMatchDto,
   TransactionDto,
   WalletDto,
+  WalletRequestDto,
   WinPattern,
   MatchWinnerDto,
 } from "@bingo/shared";
@@ -225,6 +226,30 @@ export function toTransactionDto(txn: {
     balanceAfter: txn.balanceAfter,
     createdAt: txn.createdAt.toISOString(),
     description: txn.description,
+  };
+}
+
+export function toWalletRequestDto(request: {
+  id: string;
+  type: "DEPOSIT" | "WITHDRAW";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+  amount: number;
+  details: string | null;
+  adminNote: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  resolvedAt: Date | null;
+}): WalletRequestDto {
+  return {
+    id: request.id,
+    type: request.type,
+    status: request.status,
+    amount: request.amount,
+    details: request.details,
+    adminNote: request.adminNote,
+    createdAt: request.createdAt.toISOString(),
+    updatedAt: request.updatedAt.toISOString(),
+    resolvedAt: request.resolvedAt?.toISOString() ?? null,
   };
 }
 

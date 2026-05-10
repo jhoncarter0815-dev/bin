@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   BadgeDollarSign,
   Bot,
   Crown,
@@ -12,7 +14,7 @@ import {
   UserRound,
   Wallet,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   MatchDto,
   MatchmakingStateDto,
@@ -22,6 +24,7 @@ import type {
   SpectatorMatchDto,
   TransactionDto,
   WalletDto,
+  WalletRequestDto,
 } from "@bingo/shared";
 import {
   BINGO_LETTERS,
@@ -69,6 +72,7 @@ export function App() {
   const [wallet, setWallet] = useState<WalletDto>({ balance: 0, locked: 0 });
   const [history, setHistory] = useState<MatchResultDto[]>([]);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
+  const [walletRequests, setWalletRequests] = useState<WalletRequestDto[]>([]);
   const [profile, setProfile] = useState<ProfileState>({
     totalMatches: 0,
     wins: 0,
@@ -240,16 +244,23 @@ export function App() {
   }
 
   async function refreshAccount() {
-    const [nextWallet, nextHistory, nextTransactions, nextProfile] =
-      await Promise.all([
-        endpoints.wallet(),
-        endpoints.history(),
-        endpoints.transactions(),
-        endpoints.profile(),
-      ]);
+    const [
+      nextWallet,
+      nextHistory,
+      nextTransactions,
+      nextWalletRequests,
+      nextProfile,
+    ] = await Promise.all([
+      endpoints.wallet(),
+      endpoints.history(),
+      endpoints.transactions(),
+      endpoints.walletRequests(),
+      endpoints.profile(),
+    ]);
     setWallet(nextWallet);
     setHistory(nextHistory);
     setTransactions(nextTransactions);
+    setWalletRequests(nextWalletRequests);
     setProfile(nextProfile);
   }
 
@@ -377,6 +388,39 @@ export function App() {
     }, "Invite link ready");
   }
 
+  async function submitWalletRequest(
+    type: "deposit" | "withdraw",
+    amount: number,
+    details: string,
+  ) {
+    await runAction(
+      async () => {
+        const nextRequest =
+          type === "deposit"
+            ? await endpoints.requestDeposit(amount, details)
+            : await endpoints.requestWithdraw(amount, details);
+        setWalletRequests((current) => [
+          nextRequest,
+          ...current.filter((item) => item.id !== nextRequest.id),
+        ]);
+        await refreshAccount();
+      },
+      `${type === "deposit" ? "Deposit" : "Withdrawal"} request sent`,
+    );
+  }
+
+  async function cancelPendingWalletRequest(requestId: string) {
+    await runAction(async () => {
+      const nextRequest = await endpoints.cancelWalletRequest(requestId);
+      setWalletRequests((current) =>
+        current.map((item) =>
+          item.id === nextRequest.id ? nextRequest : item,
+        ),
+      );
+      await refreshAccount();
+    }, "Request cancelled");
+  }
+
   async function openProof(matchId: string) {
     await runAction(async () => {
       const [fair, audit] = await Promise.all([
@@ -501,7 +545,10 @@ export function App() {
           <WalletPage
             wallet={wallet}
             transactions={transactions}
+            requests={walletRequests}
             onRefresh={refreshAccount}
+            onSubmitRequest={submitWalletRequest}
+            onCancelRequest={cancelPendingWalletRequest}
           />
         )}
         {!loading && page === "history" && (
@@ -1020,15 +1067,40 @@ function GamePage({
 function WalletPage({
   wallet,
   transactions,
+  requests,
   onRefresh,
+  onSubmitRequest,
+  onCancelRequest,
 }: {
   wallet: WalletDto;
   transactions: TransactionDto[];
+  requests: WalletRequestDto[];
   onRefresh: () => void;
+  onSubmitRequest: (
+    type: "deposit" | "withdraw",
+    amount: number,
+    details: string,
+  ) => Promise<void>;
+  onCancelRequest: (requestId: string) => Promise<void>;
 }) {
+  const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
+  const [amount, setAmount] = useState("");
+  const [details, setDetails] = useState("");
+  const numericAmount = Number(amount);
+  const validAmount = Number.isInteger(numericAmount) && numericAmount > 0;
+  const actionLabel = mode === "deposit" ? "Deposit" : "Withdraw";
+
   useEffect(() => {
     void onRefresh();
   }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!validAmount) return;
+    await onSubmitRequest(mode, numericAmount, details);
+    setAmount("");
+    setDetails("");
+  }
 
   return (
     <section className="stack">
@@ -1037,10 +1109,103 @@ function WalletPage({
         <h1>{wallet.balance} CR</h1>
         <span>{wallet.locked} locked</span>
       </div>
+
+      <form className="panel wallet-request-panel" onSubmit={submit}>
+        <div
+          className="wallet-mode-tabs"
+          role="tablist"
+          aria-label="Wallet action"
+        >
+          <button
+            type="button"
+            className={mode === "deposit" ? "active" : ""}
+            onClick={() => setMode("deposit")}
+          >
+            <ArrowDownToLine size={17} />
+            Deposit
+          </button>
+          <button
+            type="button"
+            className={mode === "withdraw" ? "active" : ""}
+            onClick={() => setMode("withdraw")}
+          >
+            <ArrowUpFromLine size={17} />
+            Withdraw
+          </button>
+        </div>
+
+        <label className="field-label">
+          <span>Amount</span>
+          <input
+            inputMode="numeric"
+            min="1"
+            pattern="[0-9]*"
+            placeholder="Credits"
+            value={amount}
+            onChange={(event) =>
+              setAmount(event.currentTarget.value.replace(/\D/g, ""))
+            }
+          />
+        </label>
+        <label className="field-label">
+          <span>
+            {mode === "deposit" ? "Payment proof or note" : "Payout details"}
+          </span>
+          <textarea
+            maxLength={500}
+            placeholder={
+              mode === "deposit"
+                ? "Transaction ID, sender name, or support note"
+                : "Wallet address, bank note, or support instruction"
+            }
+            value={details}
+            onChange={(event) => setDetails(event.currentTarget.value)}
+          />
+        </label>
+        <button className="primary-action" disabled={!validAmount}>
+          {mode === "deposit" ? (
+            <ArrowDownToLine size={18} />
+          ) : (
+            <ArrowUpFromLine size={18} />
+          )}
+          Request {actionLabel}
+        </button>
+      </form>
+
+      <h2 className="section-title">Requests</h2>
+      <ListEmpty items={requests} text="No wallet requests yet." />
+      {requests.map((request) => (
+        <div className="list-row wallet-request-row" key={request.id}>
+          <div>
+            <strong>{formatWalletRequestType(request.type)}</strong>
+            <small>{formatShortDate(request.createdAt)}</small>
+          </div>
+          <div className="wallet-request-side">
+            <span>{request.amount} CR</span>
+            <b className={`request-status ${request.status.toLowerCase()}`}>
+              {request.status}
+            </b>
+            {request.status === "PENDING" && (
+              <button
+                className="tiny-action"
+                type="button"
+                onClick={() => onCancelRequest(request.id)}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+
+      <h2 className="section-title">Transactions</h2>
       <ListEmpty items={transactions} text="No transactions yet." />
       {transactions.map((txn) => (
         <div className="list-row" key={txn.id}>
-          <strong>{txn.type.replaceAll("_", " ")}</strong>
+          <div>
+            <strong>{txn.type.replaceAll("_", " ")}</strong>
+            {txn.description && <small>{txn.description}</small>}
+          </div>
           <span>{txn.amount > 0 ? `+${txn.amount}` : txn.amount} CR</span>
         </div>
       ))}
@@ -1280,6 +1445,19 @@ function formatWinnerSeats(item: MatchResultDto): string {
       : [];
   if (seats.length === 0) return "Winner none";
   return `Winner ${seats.map((seat) => `Seat ${seat}`).join(", ")}`;
+}
+
+function formatWalletRequestType(type: WalletRequestDto["type"]): string {
+  return type === "DEPOSIT" ? "Deposit" : "Withdraw";
+}
+
+function formatShortDate(value: string): string {
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function readAutoBingoPreference(): boolean {

@@ -6,6 +6,7 @@ import type {
   RoomDto,
   TransactionDto,
   WalletDto,
+  WalletRequestDto,
 } from "@bingo/shared";
 import { getInitData, getReferralCode } from "./telegram";
 
@@ -102,6 +103,21 @@ export const endpoints = {
     api<AuditEntryDto[]>(`/api/match/${matchId}/audit`),
   history: () => api<MatchResultDto[]>("/api/matches/history"),
   wallet: () => api<WalletDto>("/api/wallet"),
+  walletRequests: () => api<WalletRequestDto[]>("/api/wallet/requests"),
+  requestDeposit: (amount: number, details?: string) =>
+    api<WalletRequestDto>("/api/wallet/deposit", {
+      method: "POST",
+      body: { amount, details },
+    }),
+  requestWithdraw: (amount: number, details?: string) =>
+    api<WalletRequestDto>("/api/wallet/withdraw", {
+      method: "POST",
+      body: { amount, details },
+    }),
+  cancelWalletRequest: (id: string) =>
+    api<WalletRequestDto>(`/api/wallet/requests/${id}/cancel`, {
+      method: "POST",
+    }),
   transactions: () => api<TransactionDto[]>("/api/transactions"),
   profile: () =>
     api<{
