@@ -779,7 +779,6 @@ function MatchmakingPage({
 }
 
 function SpectatorMatchPanel({ match }: { match: SpectatorMatchDto }) {
-  const called = new Set(match.calledNumbers);
   const current = match.currentNumber ? formatBall(match.currentNumber) : "...";
   const winnersSummary = match.winners
     .map((winner) => `Seat ${winner.seatNumber}`)
@@ -823,33 +822,19 @@ function SpectatorMatchPanel({ match }: { match: SpectatorMatchDto }) {
         </div>
       )}
 
-      <div className="spectator-board-grid">
+      <div className="spectator-player-list">
         {match.seats.map((seat) => (
           <div
-            className={`spectator-board ${seat.status === "FORFEIT" ? "forfeit" : ""}`}
+            className={`spectator-player ${seat.status === "FORFEIT" ? "forfeit" : ""}`}
             key={seat.id}
           >
             <div className="spectator-seat-head">
               <strong>Seat {seat.seatNumber}</strong>
               <span>{seat.username ? `@${seat.username}` : "Player"}</span>
             </div>
-            <div className="mini-bingo-card">
-              {BINGO_LETTERS.map((letter) => (
-                <div className="mini-card-head" key={letter}>
-                  {letter}
-                </div>
-              ))}
-              {seat.card.flat().map((cell) => (
-                <div
-                  className={`mini-card-cell ${
-                    isMarked(cell, called) ? "marked" : ""
-                  }`}
-                  key={`${seat.id}-${cell.row}-${cell.col}`}
-                >
-                  {cell.value}
-                </div>
-              ))}
-            </div>
+            <span className="spectator-player-status">
+              {seat.status === "FORFEIT" ? "Exited" : "Playing"}
+            </span>
           </div>
         ))}
       </div>

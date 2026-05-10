@@ -689,23 +689,24 @@ button {
   margin-top: 0;
 }
 
-.spectator-board-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
-  gap: 0.65rem;
-}
-
-.spectator-board {
+.spectator-player-list {
   display: grid;
   gap: 0.45rem;
+}
+
+.spectator-player {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   min-width: 0;
-  padding: 0.55rem;
+  padding: 0.64rem 0.7rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0.78rem;
   background: rgba(255, 255, 255, 0.045);
 }
 
-.spectator-board.forfeit {
+.spectator-player.forfeit {
   opacity: 0.52;
 }
 
@@ -729,38 +730,12 @@ button {
   font-weight: 800;
 }
 
-.mini-bingo-card {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.18rem;
-}
-
-.mini-card-head,
-.mini-card-cell {
-  display: grid;
-  place-items: center;
-  min-width: 0;
-  border-radius: 0.32rem;
-  font-weight: 950;
-}
-
-.mini-card-head {
-  min-height: 1.05rem;
-  color: var(--cyan);
-  background: rgba(100, 228, 239, 0.11);
-  font-size: 0.56rem;
-}
-
-.mini-card-cell {
-  aspect-ratio: 1;
-  color: #d9e4f6;
-  background: var(--card);
-  font-size: clamp(0.56rem, 2.3vw, 0.72rem);
-}
-
-.mini-card-cell.marked {
-  color: #071018;
-  background: linear-gradient(135deg, var(--cyan), var(--green));
+.spectator-player-status {
+  flex: 0 0 auto;
+  color: var(--green);
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .game-meta {

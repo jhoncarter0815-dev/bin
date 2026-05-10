@@ -95,7 +95,7 @@ export type MatchDto = {
 };
 
 export type SpectatorMatchDto = Omit<MatchDto, "mySeat" | "myCard"> & {
-  seats: Array<SeatDto & { card: BingoCard }>;
+  seats: SeatDto[];
   remainingPlayers: number;
 };
 

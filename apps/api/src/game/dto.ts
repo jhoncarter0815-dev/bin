@@ -162,7 +162,6 @@ export function toSpectatorMatchDto(match: MatchWithRoom): SpectatorMatchDto {
       userId: seat.userId,
       seatNumber: seat.seatNumber,
       username: seat.user.username,
-      card: parseCard(seat.card),
       status: seat.status,
     }));
 
