@@ -6,12 +6,15 @@ import { verifyAuthToken } from "./auth/jwt.js";
 
 let io: Server | undefined;
 
-export function registerRealtime(fastify: FastifyInstance, server: HttpServer): Server {
+export function registerRealtime(
+  fastify: FastifyInstance,
+  server: HttpServer,
+): Server {
   io = new Server(server, {
     cors: {
       origin: env.CORS_ORIGINS,
-      credentials: true
-    }
+      credentials: true,
+    },
   });
 
   io.use((socket, next) => {
@@ -28,14 +31,25 @@ export function registerRealtime(fastify: FastifyInstance, server: HttpServer): 
   });
 
   io.on("connection", (socket) => {
-    fastify.log.info({ socketId: socket.id, userId: socket.data.userId }, "socket connected");
+    fastify.log.info(
+      { socketId: socket.id, userId: socket.data.userId },
+      "socket connected",
+    );
 
     socket.on("room:subscribe", (roomId: string) => {
       if (typeof roomId === "string") socket.join(`room:${roomId}`);
     });
 
+    socket.on("room:unsubscribe", (roomId: string) => {
+      if (typeof roomId === "string") socket.leave(`room:${roomId}`);
+    });
+
     socket.on("match:subscribe", (matchId: string) => {
       if (typeof matchId === "string") socket.join(`match:${matchId}`);
+    });
+
+    socket.on("match:unsubscribe", (matchId: string) => {
+      if (typeof matchId === "string") socket.leave(`match:${matchId}`);
     });
   });
 
@@ -50,7 +64,10 @@ export function emitMatch(matchId: string, payload: unknown): void {
   io?.to(`match:${matchId}`).emit("match:state", payload);
 }
 
-export function emitUser(userId: string, event: string, payload: unknown): void {
+export function emitUser(
+  userId: string,
+  event: string,
+  payload: unknown,
+): void {
   io?.to(`user:${userId}`).emit(event, payload);
 }
-

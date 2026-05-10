@@ -84,6 +84,9 @@ export function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const autoBingoAttempt = useRef<string | null>(null);
+  const messageTimer = useRef<number | null>(null);
+  const socketRef = useRef<BingoSocket | null>(null);
+  const roomIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     prepareTelegramShell();
@@ -93,16 +96,46 @@ export function App() {
   useEffect(() => {
     if (!session?.token) return;
     const socket: BingoSocket = createBingoSocket(session.token);
-    socket.on("room:state", (nextRoom) => setRoom(nextRoom));
+    socketRef.current = socket;
+    const subscribeToCurrentRoom = () => {
+      if (roomIdRef.current) socket.emit("room:subscribe", roomIdRef.current);
+    };
+
+    socket.on("connect", subscribeToCurrentRoom);
+    socket.on("room:state", (nextRoom) => {
+      setRoom((currentRoom) =>
+        mergeRoomUpdateForCurrentUser(currentRoom, nextRoom),
+      );
+    });
     socket.on("match:state", (nextMatch) => {
       setMatch(nextMatch);
       if (nextMatch.status === "ACTIVE" || nextMatch.status === "FINISHED")
         setPage("game");
     });
+    subscribeToCurrentRoom();
+
     return () => {
+      socketRef.current = null;
       socket.disconnect();
     };
   }, [session?.token]);
+
+  useEffect(() => {
+    roomIdRef.current = room?.id ?? null;
+    const socket = socketRef.current;
+    if (!socket || !room?.id) return;
+
+    socket.emit("room:subscribe", room.id);
+    return () => {
+      socket.emit("room:unsubscribe", room.id);
+    };
+  }, [room?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (messageTimer.current) window.clearTimeout(messageTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!session) return;
@@ -155,7 +188,7 @@ export function App() {
   async function boot() {
     try {
       setLoading(true);
-      setMessage("");
+      showMessage("");
       const nextSession = await authenticate();
       setSession(nextSession);
       setWallet(nextSession.wallet);
@@ -165,7 +198,9 @@ export function App() {
         setPage("game");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Startup failed");
+      showMessage(error instanceof Error ? error.message : "Startup failed", {
+        timeoutMs: 6000,
+      });
     } finally {
       setLoading(false);
     }
@@ -249,7 +284,7 @@ export function App() {
 
   async function submitAutoBingo(matchId: string) {
     try {
-      setMessage("");
+      showMessage("");
       const nextMatch = await endpoints.claimBingo(matchId);
       setMatch(nextMatch);
       setWallet(await endpoints.wallet());
@@ -257,7 +292,9 @@ export function App() {
       haptic("medium");
     } catch (error) {
       const text = error instanceof Error ? error.message : "Auto Bingo failed";
-      if (!text.toLowerCase().includes("already finished")) setMessage(text);
+      if (!text.toLowerCase().includes("already finished")) {
+        showMessage(text, { timeoutMs: 5000 });
+      }
     }
   }
 
@@ -322,14 +359,34 @@ export function App() {
 
   async function runAction(action: () => Promise<void>, success?: string) {
     try {
-      setMessage("");
+      showMessage("");
       await action();
       haptic("light");
-      if (success) setMessage(success);
+      if (success) showMessage(success);
     } catch (error) {
       haptic("heavy");
-      setMessage(error instanceof Error ? error.message : "Action failed");
+      showMessage(error instanceof Error ? error.message : "Action failed", {
+        timeoutMs: 5000,
+      });
     }
+  }
+
+  function showMessage(
+    nextMessage: string,
+    options: { timeoutMs?: number } = {},
+  ) {
+    if (messageTimer.current) {
+      window.clearTimeout(messageTimer.current);
+      messageTimer.current = null;
+    }
+
+    setMessage(nextMessage);
+    if (!nextMessage) return;
+
+    messageTimer.current = window.setTimeout(() => {
+      setMessage("");
+      messageTimer.current = null;
+    }, options.timeoutMs ?? 3000);
   }
 
   const activeSeat = room?.seats.find((seat) => seat.isMine)?.seatNumber;
@@ -445,6 +502,30 @@ function BootScreen() {
       <h1>Booting Core</h1>
     </section>
   );
+}
+
+function mergeRoomUpdateForCurrentUser(
+  currentRoom: RoomDto | null,
+  nextRoom: RoomDto,
+): RoomDto | null {
+  if (!currentRoom || currentRoom.id !== nextRoom.id) return currentRoom;
+
+  const currentSeat = currentRoom.seats.find((seat) => seat.isMine);
+  if (!currentSeat) return nextRoom;
+
+  const stillMine = nextRoom.seats.some(
+    (seat) => seat.id === currentSeat.id && seat.userId === currentSeat.userId,
+  );
+  if (!stillMine) return nextRoom;
+
+  return {
+    ...nextRoom,
+    seats: nextRoom.seats.map((seat) =>
+      seat.id === currentSeat.id
+        ? { ...seat, card: currentSeat.card, isMine: true }
+        : seat,
+    ),
+  };
 }
 
 function HomePage({
