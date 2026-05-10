@@ -39,6 +39,14 @@ export type AuditEntryDto = {
   createdAt: string;
 };
 
+export type DepositRequestInput = {
+  amount: number;
+  details?: string;
+  transactionCode: string;
+  transactionTime: string;
+  receiptUrl: string;
+};
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -104,10 +112,10 @@ export const endpoints = {
   history: () => api<MatchResultDto[]>("/api/matches/history"),
   wallet: () => api<WalletDto>("/api/wallet"),
   walletRequests: () => api<WalletRequestDto[]>("/api/wallet/requests"),
-  requestDeposit: (amount: number, details?: string) =>
+  requestDeposit: (input: DepositRequestInput) =>
     api<WalletRequestDto>("/api/wallet/deposit", {
       method: "POST",
-      body: { amount, details },
+      body: input,
     }),
   requestWithdraw: (amount: number, details?: string) =>
     api<WalletRequestDto>("/api/wallet/withdraw", {

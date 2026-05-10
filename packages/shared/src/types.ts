@@ -45,6 +45,12 @@ export type WalletRequestDto = {
   status: WalletRequestStatus;
   amount: number;
   details?: string | null;
+  provider?: string | null;
+  transactionCode?: string | null;
+  transactionTime?: string | null;
+  receiptUrl?: string | null;
+  validationStatus?: string | null;
+  validationReason?: string | null;
   adminNote?: string | null;
   createdAt: string;
   updatedAt: string;

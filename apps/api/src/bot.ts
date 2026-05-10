@@ -443,7 +443,7 @@ async function replyDeposit(ctx: Context): Promise<void> {
       "Deposit",
       walletInstruction(
         env.DEPOSIT_INSTRUCTIONS,
-        "Open the Mini App Wallet tab, submit a deposit request, and add your payment proof or note. An admin will confirm it and credit your wallet.",
+        "Open the Mini App Wallet tab and submit the Telebirr transaction code, transaction time, and receipt validation URL. Verified receipts are credited automatically.",
       ),
       supportContactText(),
     ].join("\n"),
@@ -562,6 +562,9 @@ async function replyAdminSettings(ctx: Context): Promise<void> {
       `PUBLIC_ROOM_SECONDS=${env.PUBLIC_ROOM_SECONDS}`,
       `PUBLIC_ENTRY_FEE=${env.PUBLIC_ENTRY_FEE}`,
       `DRAW_INTERVAL_MS=${env.DRAW_INTERVAL_MS}`,
+      `TELEBIRR_AUTO_DEPOSIT_ENABLED=${env.TELEBIRR_AUTO_DEPOSIT_ENABLED}`,
+      `TELEBIRR_RECEIPT_ALLOWED_HOSTS=${env.TELEBIRR_RECEIPT_ALLOWED_HOSTS.join(",")}`,
+      `TELEBIRR_DEPOSIT_RECEIVER=${env.TELEBIRR_DEPOSIT_RECEIVER ? "configured" : "missing"}`,
       "",
       "Change these in Railway variables, then redeploy/restart.",
       "Use ADMIN_TELEGRAM_IDS as a comma-separated list of numeric Telegram IDs.",
@@ -1305,7 +1308,14 @@ function formatWalletRequestLine(request: PendingWalletRequest): string {
   const detail = request.details
     ? ` note=${truncateText(request.details, 42)}`
     : "";
-  return `${shortRequestId(request.id)} ${request.type.toLowerCase()} ${request.amount} credits ${displayUser(request.user)} balance=${balance}${detail}`;
+  const provider = request.provider ? ` ${request.provider}` : "";
+  const code = request.transactionCode
+    ? ` code=${request.transactionCode}`
+    : "";
+  const validation = request.validationReason
+    ? ` review=${truncateText(request.validationReason, 48)}`
+    : "";
+  return `${shortRequestId(request.id)}${provider} ${request.type.toLowerCase()} ${request.amount} credits ${displayUser(request.user)} balance=${balance}${code}${validation}${detail}`;
 }
 
 function shortRequestId(requestId: string): string {

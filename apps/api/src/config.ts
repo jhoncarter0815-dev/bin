@@ -21,6 +21,25 @@ const schema = z.object({
   SUPPORT_CONTACT: z.string().optional().or(z.literal("")).default(""),
   DEPOSIT_INSTRUCTIONS: z.string().optional().or(z.literal("")).default(""),
   WITHDRAW_INSTRUCTIONS: z.string().optional().or(z.literal("")).default(""),
+  TELEBIRR_AUTO_DEPOSIT_ENABLED: z
+    .string()
+    .transform((value) => value !== "false")
+    .default("true"),
+  TELEBIRR_DEPOSIT_RECEIVER: z
+    .string()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
+  TELEBIRR_RECEIPT_ALLOWED_HOSTS: z
+    .string()
+    .default("transactioninfo.ethiotelecom.et"),
+  TELEBIRR_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  TELEBIRR_MAX_RECEIPT_AGE_HOURS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(72),
+  TELEBIRR_CREDIT_PER_ETB: z.coerce.number().positive().default(1),
   TELEGRAM_WEBHOOK_URL: z
     .string()
     .url()
@@ -71,6 +90,10 @@ export const env = {
   CORS_ORIGINS: parsed.data.CORS_ORIGINS.split(",")
     .map((origin) => origin.trim())
     .filter(Boolean),
+  TELEBIRR_RECEIPT_ALLOWED_HOSTS:
+    parsed.data.TELEBIRR_RECEIPT_ALLOWED_HOSTS.split(",")
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
 };
 
 export function miniAppUrl(): string {

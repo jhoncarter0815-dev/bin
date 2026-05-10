@@ -1036,6 +1036,15 @@ button {
   border-color: rgba(100, 228, 239, 0.55);
 }
 
+.telebirr-fields {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(100, 228, 239, 0.12);
+  border-radius: 0.82rem;
+  background: rgba(100, 228, 239, 0.045);
+}
+
 .wallet-request-row > div:first-child,
 .list-row > div:first-child {
   display: grid;

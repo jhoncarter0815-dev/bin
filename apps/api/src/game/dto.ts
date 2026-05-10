@@ -235,6 +235,12 @@ export function toWalletRequestDto(request: {
   status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   amount: number;
   details: string | null;
+  provider: string | null;
+  transactionCode: string | null;
+  transactionTime: string | null;
+  receiptUrl: string | null;
+  validationStatus: string | null;
+  validationReason: string | null;
   adminNote: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -246,6 +252,12 @@ export function toWalletRequestDto(request: {
     status: request.status,
     amount: request.amount,
     details: request.details,
+    provider: request.provider,
+    transactionCode: request.transactionCode,
+    transactionTime: request.transactionTime,
+    receiptUrl: request.receiptUrl,
+    validationStatus: request.validationStatus,
+    validationReason: request.validationReason,
     adminNote: request.adminNote,
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),

@@ -1,5 +1,5 @@
+import { Prisma } from "@prisma/client";
 import type {
-  Prisma,
   PrismaClient,
   WalletRequestStatus,
   WalletRequestType,
@@ -7,6 +7,11 @@ import type {
 import { AppError, ConflictError, NotFoundError } from "../errors.js";
 import { prisma } from "../prisma.js";
 import { logAudit } from "./audit.js";
+import {
+  normalizeTelebirrReceiptUrl,
+  normalizeTelebirrTransactionCode,
+  validateTelebirrDeposit,
+} from "./telebirr.js";
 import { creditWallet, debitWallet } from "./wallet.js";
 
 type TxClient = Omit<
@@ -21,11 +26,18 @@ export async function createWalletRequest(input: {
   type: WalletRequestType;
   amount: number;
   details?: string | null;
+  transactionCode?: string | null;
+  transactionTime?: string | null;
+  receiptUrl?: string | null;
 }) {
   assertWalletAmount(input.amount);
 
   if (input.type === "WITHDRAW") {
     await assertWithdrawCapacity(input.userId, input.amount);
+  }
+
+  if (input.type === "DEPOSIT") {
+    return createTelebirrDepositRequest(input);
   }
 
   return prisma.$transaction(async (tx) => {
@@ -50,6 +62,111 @@ export async function createWalletRequest(input: {
 
     return request;
   });
+}
+
+async function createTelebirrDepositRequest(input: {
+  userId: string;
+  amount: number;
+  details?: string | null;
+  transactionCode?: string | null;
+  transactionTime?: string | null;
+  receiptUrl?: string | null;
+}) {
+  const transactionCode = normalizeTelebirrTransactionCode(
+    requiredText(
+      input.transactionCode,
+      "Telebirr transaction code is required",
+    ),
+  );
+  const transactionTime = requiredText(
+    input.transactionTime,
+    "Telebirr transaction time is required",
+  ).slice(0, 120);
+  const receiptUrl = normalizeTelebirrReceiptUrl(
+    requiredText(input.receiptUrl, "Telebirr receipt URL is required"),
+  ).toString();
+
+  const duplicate = await prisma.walletRequest.findFirst({
+    where: {
+      OR: [{ transactionCode }, { receiptUrl }],
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw new ConflictError(
+      "This Telebirr transaction code or receipt URL was already submitted",
+    );
+  }
+
+  const validation = await validateTelebirrDeposit({
+    amount: input.amount,
+    transactionCode,
+    transactionTime,
+    receiptUrl,
+  });
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const request = await tx.walletRequest.create({
+        data: {
+          userId: input.userId,
+          type: "DEPOSIT",
+          status: validation.autoApprove ? "APPROVED" : "PENDING",
+          amount: input.amount,
+          details: cleanText(input.details),
+          provider: "TELEBIRR",
+          transactionCode,
+          transactionTime,
+          receiptUrl,
+          validationStatus: validation.status,
+          validationReason: validation.reason,
+          validationPayload: validation.payload as Prisma.InputJsonValue,
+          resolvedAt: validation.autoApprove ? new Date() : null,
+        },
+      });
+
+      if (validation.autoApprove) {
+        await creditWallet(tx, {
+          userId: input.userId,
+          amount: input.amount,
+          type: "DEPOSIT",
+          description: "Telebirr deposit auto-approved",
+          metadata: {
+            walletRequestId: request.id,
+            provider: "TELEBIRR",
+            transactionCode,
+            receiptUrl,
+          },
+        });
+      }
+
+      await logAudit(tx, {
+        actorId: input.userId,
+        action: validation.autoApprove
+          ? "TELEBIRR_DEPOSIT_AUTO_APPROVED"
+          : "TELEBIRR_DEPOSIT_NEEDS_REVIEW",
+        target: walletRequestTarget(request.id),
+        metadata: {
+          amount: input.amount,
+          transactionCode,
+          validationStatus: validation.status,
+          validationReason: validation.reason,
+        },
+      });
+
+      return request;
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new ConflictError(
+        "This Telebirr transaction code or receipt URL was already submitted",
+      );
+    }
+    throw error;
+  }
 }
 
 export function listWalletRequests(userId: string) {
@@ -263,6 +380,15 @@ function cleanText(value?: string | null): string | null {
   const text = value?.trim();
   if (!text) return null;
   return text.slice(0, 500);
+}
+
+function requiredText(
+  value: string | null | undefined,
+  message: string,
+): string {
+  const text = value?.trim();
+  if (!text) throw new AppError(message);
+  return text;
 }
 
 function walletRequestTarget(requestId: string): string {

@@ -37,6 +37,7 @@ import {
   authenticate,
   endpoints,
   type AuditEntryDto,
+  type DepositRequestInput,
   type FairProofDto,
   type Session,
 } from "./api";
@@ -392,12 +393,19 @@ export function App() {
     type: "deposit" | "withdraw",
     amount: number,
     details: string,
+    telebirr?: Omit<DepositRequestInput, "amount" | "details">,
   ) {
     await runAction(
       async () => {
         const nextRequest =
           type === "deposit"
-            ? await endpoints.requestDeposit(amount, details)
+            ? await endpoints.requestDeposit({
+                amount,
+                details,
+                transactionCode: telebirr?.transactionCode ?? "",
+                transactionTime: telebirr?.transactionTime ?? "",
+                receiptUrl: telebirr?.receiptUrl ?? "",
+              })
             : await endpoints.requestWithdraw(amount, details);
         setWalletRequests((current) => [
           nextRequest,
@@ -1080,14 +1088,23 @@ function WalletPage({
     type: "deposit" | "withdraw",
     amount: number,
     details: string,
+    telebirr?: Omit<DepositRequestInput, "amount" | "details">,
   ) => Promise<void>;
   onCancelRequest: (requestId: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
   const [amount, setAmount] = useState("");
   const [details, setDetails] = useState("");
+  const [transactionCode, setTransactionCode] = useState("");
+  const [transactionTime, setTransactionTime] = useState("");
+  const [receiptUrl, setReceiptUrl] = useState("");
   const numericAmount = Number(amount);
   const validAmount = Number.isInteger(numericAmount) && numericAmount > 0;
+  const depositReady =
+    mode === "withdraw" ||
+    (transactionCode.trim().length >= 6 &&
+      transactionTime.trim().length >= 6 &&
+      receiptUrl.trim().length >= 12);
   const actionLabel = mode === "deposit" ? "Deposit" : "Withdraw";
 
   useEffect(() => {
@@ -1096,10 +1113,24 @@ function WalletPage({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!validAmount) return;
-    await onSubmitRequest(mode, numericAmount, details);
+    if (!validAmount || !depositReady) return;
+    await onSubmitRequest(
+      mode,
+      numericAmount,
+      details,
+      mode === "deposit"
+        ? {
+            transactionCode,
+            transactionTime,
+            receiptUrl,
+          }
+        : undefined,
+    );
     setAmount("");
     setDetails("");
+    setTransactionCode("");
+    setTransactionTime("");
+    setReceiptUrl("");
   }
 
   return (
@@ -1162,7 +1193,50 @@ function WalletPage({
             onChange={(event) => setDetails(event.currentTarget.value)}
           />
         </label>
-        <button className="primary-action" disabled={!validAmount}>
+
+        {mode === "deposit" && (
+          <div className="telebirr-fields">
+            <label className="field-label">
+              <span>Telebirr transaction code</span>
+              <input
+                autoCapitalize="characters"
+                placeholder="BHV3BNI9ON"
+                value={transactionCode}
+                onChange={(event) =>
+                  setTransactionCode(
+                    event.currentTarget.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, ""),
+                  )
+                }
+              />
+            </label>
+            <label className="field-label">
+              <span>Transaction time</span>
+              <input
+                placeholder="2026-05-10 20:42"
+                value={transactionTime}
+                onChange={(event) =>
+                  setTransactionTime(event.currentTarget.value)
+                }
+              />
+            </label>
+            <label className="field-label">
+              <span>Receipt validation URL</span>
+              <input
+                inputMode="url"
+                placeholder="https://transactioninfo.ethiotelecom.et/receipt/..."
+                value={receiptUrl}
+                onChange={(event) => setReceiptUrl(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+        )}
+
+        <button
+          className="primary-action"
+          disabled={!validAmount || !depositReady}
+        >
           {mode === "deposit" ? (
             <ArrowDownToLine size={18} />
           ) : (
@@ -1178,7 +1252,14 @@ function WalletPage({
         <div className="list-row wallet-request-row" key={request.id}>
           <div>
             <strong>{formatWalletRequestType(request.type)}</strong>
-            <small>{formatShortDate(request.createdAt)}</small>
+            <small>
+              {request.transactionCode
+                ? `${request.transactionCode} · ${formatShortDate(request.createdAt)}`
+                : formatShortDate(request.createdAt)}
+            </small>
+            {request.validationReason && (
+              <small>{request.validationReason}</small>
+            )}
           </div>
           <div className="wallet-request-side">
             <span>{request.amount} CR</span>

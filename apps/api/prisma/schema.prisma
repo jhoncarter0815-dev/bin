@@ -123,23 +123,31 @@ model Wallet {
 }
 
 model WalletRequest {
-  id         String              @id @default(cuid())
-  userId     String
-  type       WalletRequestType
-  status     WalletRequestStatus @default(PENDING)
-  amount     Int
-  details    String?
-  adminNote  String?
-  adminId    String?
-  createdAt  DateTime            @default(now())
-  updatedAt  DateTime            @updatedAt
-  resolvedAt DateTime?
-  user       User                @relation("WalletRequestUser", fields: [userId], references: [id], onDelete: Cascade)
-  admin      User?               @relation("WalletRequestAdmin", fields: [adminId], references: [id])
+  id                String              @id @default(cuid())
+  userId            String
+  type              WalletRequestType
+  status            WalletRequestStatus @default(PENDING)
+  amount            Int
+  details           String?
+  provider          String?
+  transactionCode   String?             @unique
+  transactionTime   String?
+  receiptUrl        String?             @unique
+  validationStatus  String?
+  validationReason  String?
+  validationPayload Json?
+  adminNote         String?
+  adminId           String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  resolvedAt        DateTime?
+  user              User                @relation("WalletRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  admin             User?               @relation("WalletRequestAdmin", fields: [adminId], references: [id])
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([type, status])
+  @@index([provider, createdAt])
 }
 
 model Room {

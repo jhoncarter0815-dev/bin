@@ -46,6 +46,12 @@ const walletRequestBodySchema = z.object({
   details: z.string().max(500).optional(),
 });
 
+const telebirrDepositBodySchema = walletRequestBodySchema.extend({
+  transactionCode: z.string().min(6).max(80),
+  transactionTime: z.string().min(6).max(120),
+  receiptUrl: z.string().url().max(500),
+});
+
 export async function registerCoreRoutes(
   fastify: FastifyInstance,
 ): Promise<void> {
@@ -252,12 +258,15 @@ export async function registerCoreRoutes(
     "/api/wallet/deposit",
     { preHandler: fastify.authenticate },
     async (request) => {
-      const body = walletRequestBodySchema.parse(request.body ?? {});
+      const body = telebirrDepositBodySchema.parse(request.body ?? {});
       const walletRequest = await createWalletRequest({
         userId: request.user!.id,
         type: "DEPOSIT",
         amount: body.amount,
         details: body.details,
+        transactionCode: body.transactionCode,
+        transactionTime: body.transactionTime,
+        receiptUrl: body.receiptUrl,
       });
       return toWalletRequestDto(walletRequest);
     },
