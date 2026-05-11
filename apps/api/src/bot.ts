@@ -14,9 +14,16 @@ import { prisma } from "./prisma.js";
 import { creditWallet, debitWallet } from "./services/wallet.js";
 import {
   approveWalletRequest,
+  createWalletRequest,
   listPendingWalletRequests,
   rejectWalletRequest,
 } from "./services/walletRequests.js";
+import {
+  moneyEquals,
+  normalizeTelebirrPhone,
+  parseTelebirrMessage,
+} from "./services/telebirr.js";
+import { upsertTelegramUser } from "./services/users.js";
 
 export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
@@ -25,6 +32,7 @@ const MAIN_MENU_TEXT =
 const ADMIN_MENU_TEXT =
   "Admin tools\nUse these controls to inspect the live bot and run safe operational actions.";
 const RECENT_PIN_WINDOW_MS = 6 * 60 * 60 * 1000;
+const DEPOSIT_SESSION_MS = 30 * 60 * 1000;
 type PendingWalletRequest = Awaited<
   ReturnType<typeof listPendingWalletRequests>
 >[number];
@@ -58,6 +66,14 @@ bot.command("wallet", async (ctx) => {
   return ctx.reply(
     `Wallet: ${user.wallet.balance} credits\nLocked: ${user.wallet.locked} credits`,
   );
+});
+
+bot.command("deposit", async (ctx) => {
+  await replyDeposit(ctx);
+});
+
+bot.command("cancel_deposit", async (ctx) => {
+  await cancelDepositFlow(ctx);
 });
 
 bot.command("invite", async (ctx) => {
@@ -166,6 +182,14 @@ bot.action("menu:help", async (ctx) => {
 bot.action("menu:invite", async (ctx) => {
   await ctx.answerCbQuery();
   await replyInvite(ctx);
+});
+
+bot.on("contact", async (ctx) => {
+  await handleDepositContact(ctx);
+});
+
+bot.on("text", async (ctx) => {
+  await handleDepositText(ctx);
 });
 
 bot.action("admin:menu", async (ctx) => {
@@ -399,6 +423,8 @@ export async function registerBot(fastify: FastifyInstance): Promise<void> {
     { command: "menu", description: "Show the pinned menu" },
     { command: "play", description: "Play Bingo" },
     { command: "wallet", description: "Check credits" },
+    { command: "deposit", description: "Deposit with Telebirr" },
+    { command: "cancel_deposit", description: "Cancel deposit flow" },
     { command: "invite", description: "Invite players" },
     { command: "help", description: "How to play" },
   ]);
@@ -438,17 +464,11 @@ async function sendAdminMenu(ctx: Context): Promise<void> {
 }
 
 async function replyDeposit(ctx: Context): Promise<void> {
-  await ctx.reply(
-    [
-      "Deposit",
-      walletInstruction(
-        env.DEPOSIT_INSTRUCTIONS,
-        "Open the Mini App Wallet tab and submit the Telebirr transaction code, transaction time, and receipt validation URL. Verified receipts are credited automatically.",
-      ),
-      supportContactText(),
-    ].join("\n"),
-    supportKeyboard(),
-  );
+  if (!isPrivateChat(ctx)) {
+    await ctx.reply("Open a private chat with the bot to deposit safely.");
+    return;
+  }
+  await startDepositFlow(ctx);
 }
 
 async function replyWithdraw(ctx: Context): Promise<void> {
@@ -465,11 +485,296 @@ async function replyWithdraw(ctx: Context): Promise<void> {
   );
 }
 
+async function startDepositFlow(ctx: Context): Promise<void> {
+  if (!env.TELEBIRR_DEPOSIT_PHONE.trim()) {
+    await ctx.reply(
+      "Telebirr deposit phone is not configured yet. Please contact support.",
+      supportKeyboard(),
+    );
+    return;
+  }
+
+  const user = await ensureBotUser(ctx);
+  if (!user) {
+    await ctx.reply("I could not connect your Telegram account.");
+    return;
+  }
+
+  if (!user.phoneNumber) {
+    await prisma.botDepositSession.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        step: "CONTACT",
+        expiresAt: depositSessionExpiry(),
+      },
+      update: {
+        step: "CONTACT",
+        amountCredits: null,
+        requestedEtb: null,
+        expiresAt: depositSessionExpiry(),
+      },
+    });
+    await askForContact(ctx);
+    return;
+  }
+
+  await prisma.botDepositSession.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      step: "AMOUNT",
+      expiresAt: depositSessionExpiry(),
+    },
+    update: {
+      step: "AMOUNT",
+      amountCredits: null,
+      requestedEtb: null,
+      expiresAt: depositSessionExpiry(),
+    },
+  });
+  await askForDepositAmount(ctx);
+}
+
+async function handleDepositContact(ctx: Context): Promise<void> {
+  if (!isPrivateChat(ctx)) return;
+  const contact = (
+    ctx.message as
+      | {
+          contact?: {
+            phone_number?: string;
+            user_id?: number;
+            first_name?: string;
+            last_name?: string;
+          };
+        }
+      | undefined
+  )?.contact;
+  if (!contact?.phone_number || !ctx.from?.id) return;
+
+  if (contact.user_id !== ctx.from.id) {
+    await ctx.reply(
+      "Please share your own Telegram contact using the button. Deposits must come from your saved phone number.",
+    );
+    return;
+  }
+
+  const user = await ensureBotUser(ctx);
+  if (!user) {
+    await ctx.reply("I could not connect your Telegram account.");
+    return;
+  }
+
+  const phoneNumber = normalizeTelebirrPhone(contact.phone_number);
+  if (!phoneNumber) {
+    await ctx.reply("That phone number could not be read. Please try again.");
+    return;
+  }
+
+  try {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        phoneNumber,
+        phoneTelegramUserId: BigInt(ctx.from.id),
+        phoneVerifiedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    await ctx.reply(
+      error instanceof Error && error.message.includes("Unique constraint")
+        ? "That phone number is already linked to another account."
+        : "Could not save that phone number. Please contact support.",
+      supportKeyboard(),
+    );
+    return;
+  }
+
+  await prisma.botDepositSession.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      step: "AMOUNT",
+      expiresAt: depositSessionExpiry(),
+    },
+    update: {
+      step: "AMOUNT",
+      amountCredits: null,
+      requestedEtb: null,
+      expiresAt: depositSessionExpiry(),
+    },
+  });
+
+  await ctx.reply(
+    `Saved phone ending ${phoneNumber.slice(-4)}. Deposits must be sent from this Telebirr number.`,
+    Markup.removeKeyboard(),
+  );
+  await askForDepositAmount(ctx);
+}
+
+async function handleDepositText(ctx: Context): Promise<void> {
+  if (!isPrivateChat(ctx)) return;
+  const text = messageText(ctx);
+  if (!text || text.startsWith("/")) return;
+
+  const telegramId = ctx.from?.id ? BigInt(ctx.from.id) : undefined;
+  if (!telegramId) return;
+
+  const user = await prisma.user.findUnique({
+    where: { telegramId },
+    include: { botDepositSession: true, wallet: true },
+  });
+  const session = user?.botDepositSession;
+  if (!user || !session) return;
+
+  if (session.expiresAt.getTime() < Date.now()) {
+    await prisma.botDepositSession.delete({ where: { userId: user.id } });
+    await ctx.reply("Deposit session expired. Tap Deposit to start again.");
+    return;
+  }
+
+  if (session.step === "CONTACT") {
+    await askForContact(ctx);
+    return;
+  }
+
+  if (session.step === "AMOUNT") {
+    const amountEtb = parseDepositEtb(text);
+    if (!amountEtb) {
+      await ctx.reply("Send the deposit amount as a number, for example: 1000");
+      return;
+    }
+
+    const credits = Math.round(amountEtb * env.TELEBIRR_CREDIT_PER_ETB);
+    if (credits <= 0) {
+      await ctx.reply("Deposit amount is too small.");
+      return;
+    }
+
+    await prisma.botDepositSession.update({
+      where: { userId: user.id },
+      data: {
+        step: "RECEIPT",
+        amountCredits: credits,
+        requestedEtb: amountEtb.toFixed(2),
+        expiresAt: depositSessionExpiry(),
+      },
+    });
+
+    await ctx.reply(
+      [
+        `Send ETB ${formatEtb(amountEtb)} to:`,
+        `${env.TELEBIRR_DEPOSIT_RECEIVER || "Bingo Core"} ${env.TELEBIRR_DEPOSIT_PHONE}`,
+        "",
+        "After payment, paste the full Telebirr message exactly as you received it.",
+      ].join("\n"),
+      Markup.removeKeyboard(),
+    );
+    return;
+  }
+
+  if (session.step === "RECEIPT") {
+    await finishDepositFromTelebirrMessage(ctx, user, text);
+  }
+}
+
+async function finishDepositFromTelebirrMessage(
+  ctx: Context,
+  user: {
+    id: string;
+    telegramId: bigint;
+    phoneNumber: string | null;
+    botDepositSession: {
+      amountCredits: number | null;
+      requestedEtb: unknown;
+    } | null;
+    wallet: { balance: number; locked: number } | null;
+  },
+  message: string,
+): Promise<void> {
+  const session = user.botDepositSession;
+  if (!session?.amountCredits) {
+    await ctx.reply("Deposit amount is missing. Tap Deposit to start again.");
+    return;
+  }
+  if (!user.phoneNumber) {
+    await askForContact(ctx);
+    return;
+  }
+
+  try {
+    const parsed = parseTelebirrMessage(message);
+    const requestedEtb = Number(session.requestedEtb);
+    if (
+      Number.isFinite(requestedEtb) &&
+      !moneyEquals(parsed.amountEtb, requestedEtb)
+    ) {
+      await ctx.reply(
+        `The Telebirr message says ETB ${formatEtb(parsed.amountEtb)}, but you entered ETB ${formatEtb(requestedEtb)}. Start again with /deposit if the amount changed.`,
+      );
+      return;
+    }
+
+    const request = await createWalletRequest({
+      userId: user.id,
+      type: "DEPOSIT",
+      amount: session.amountCredits,
+      details: "Telegram bot Telebirr deposit",
+      telebirrMessage: message,
+      senderPhoneNumber: user.phoneNumber,
+    });
+
+    await prisma.botDepositSession.delete({ where: { userId: user.id } });
+    const wallet = await prisma.wallet.findUnique({
+      where: { userId: user.id },
+    });
+
+    if (request.status === "APPROVED") {
+      await ctx.reply(
+        [
+          `Deposit verified: +${request.amount} credits`,
+          `Wallet balance: ${wallet?.balance ?? user.wallet?.balance ?? 0} credits`,
+        ].join("\n"),
+      );
+      return;
+    }
+
+    await ctx.reply(
+      [
+        "Deposit received for manual review.",
+        request.validationReason ?? "An admin will review it shortly.",
+      ].join("\n"),
+      supportKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(
+      [
+        error instanceof Error
+          ? error.message
+          : "Could not read that Telebirr message.",
+        "Please paste the full Telebirr message again, including the receipt link.",
+      ].join("\n"),
+    );
+  }
+}
+
+async function cancelDepositFlow(ctx: Context): Promise<void> {
+  const user = await botUserByContext(ctx);
+  if (!user) {
+    await ctx.reply("No deposit session found.");
+    return;
+  }
+  await prisma.botDepositSession
+    .delete({ where: { userId: user.id } })
+    .catch(() => undefined);
+  await ctx.reply("Deposit flow cancelled.", Markup.removeKeyboard());
+}
+
 async function replyHelp(ctx: Context): Promise<void> {
   await ctx.reply(
     [
       "Help",
-      "Use Play to join a room, Wallet to check credits, and Invite to share your referral link.",
+      "Use Play to join a room, Deposit to add Telebirr credits, Wallet to check credits, and Invite to share your referral link.",
       "Bingo claims are validated by the server and every finished match exposes a fair-play proof.",
       supportContactText(),
     ].join("\n"),
@@ -565,6 +870,7 @@ async function replyAdminSettings(ctx: Context): Promise<void> {
       `TELEBIRR_AUTO_DEPOSIT_ENABLED=${env.TELEBIRR_AUTO_DEPOSIT_ENABLED}`,
       `TELEBIRR_RECEIPT_ALLOWED_HOSTS=${env.TELEBIRR_RECEIPT_ALLOWED_HOSTS.join(",")}`,
       `TELEBIRR_DEPOSIT_RECEIVER=${env.TELEBIRR_DEPOSIT_RECEIVER ? "configured" : "missing"}`,
+      `TELEBIRR_DEPOSIT_PHONE=${env.TELEBIRR_DEPOSIT_PHONE ? "configured" : "missing"}`,
       "",
       "Change these in Railway variables, then redeploy/restart.",
       "Use ADMIN_TELEGRAM_IDS as a comma-separated list of numeric Telegram IDs.",
@@ -1026,6 +1332,59 @@ function supportContactUrl(): string | undefined {
   return undefined;
 }
 
+async function askForContact(ctx: Context): Promise<void> {
+  await ctx.reply(
+    "Share your Telegram contact first. Deposits must be sent from this same Telebirr phone number.",
+    Markup.keyboard([
+      [Markup.button.contactRequest("Share my phone number")],
+    ]).resize(),
+  );
+}
+
+async function askForDepositAmount(ctx: Context): Promise<void> {
+  await ctx.reply(
+    [
+      "Send the Telebirr deposit amount in ETB.",
+      `Credit rate: 1 ETB = ${env.TELEBIRR_CREDIT_PER_ETB} credit(s).`,
+    ].join("\n"),
+    Markup.removeKeyboard(),
+  );
+}
+
+async function ensureBotUser(ctx: Context) {
+  if (!ctx.from?.id) return null;
+  return upsertTelegramUser({
+    id: ctx.from.id,
+    username: ctx.from.username,
+    first_name: ctx.from.first_name,
+    last_name: ctx.from.last_name,
+  });
+}
+
+async function botUserByContext(ctx: Context) {
+  const telegramId = ctx.from?.id ? BigInt(ctx.from.id) : undefined;
+  if (!telegramId) return null;
+  return prisma.user.findUnique({ where: { telegramId } });
+}
+
+function depositSessionExpiry(): Date {
+  return new Date(Date.now() + DEPOSIT_SESSION_MS);
+}
+
+function parseDepositEtb(value: string): number | null {
+  const match = value.replace(/,/g, "").match(/([0-9]+(?:\.[0-9]{1,2})?)/);
+  if (!match?.[1]) return null;
+  const amount = Number(match[1]);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function formatEtb(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 async function isAdminContext(ctx: Context): Promise<boolean> {
   const telegramId = ctx.from?.id;
   if (!telegramId) return false;
@@ -1277,6 +1636,7 @@ function formatUserLine(user: {
   username: string | null;
   firstName: string | null;
   lastName: string | null;
+  phoneNumber?: string | null;
   isAdmin: boolean;
   isBanned: boolean;
   wallet: { balance: number; locked: number } | null;
@@ -1285,7 +1645,8 @@ function formatUserLine(user: {
     user.isAdmin ? "admin" : "",
     user.isBanned ? "banned" : "",
   ].filter(Boolean);
-  return `${displayUser(user)} wallet=${user.wallet?.balance ?? 0} locked=${user.wallet?.locked ?? 0}${flags.length ? ` (${flags.join(", ")})` : ""}`;
+  const phone = user.phoneNumber ? ` phone=*${user.phoneNumber.slice(-4)}` : "";
+  return `${displayUser(user)} wallet=${user.wallet?.balance ?? 0} locked=${user.wallet?.locked ?? 0}${phone}${flags.length ? ` (${flags.join(", ")})` : ""}`;
 }
 
 function formatTransactionLine(transaction: {
@@ -1315,7 +1676,10 @@ function formatWalletRequestLine(request: PendingWalletRequest): string {
   const validation = request.validationReason
     ? ` review=${truncateText(request.validationReason, 48)}`
     : "";
-  return `${shortRequestId(request.id)}${provider} ${request.type.toLowerCase()} ${request.amount} credits ${displayUser(request.user)} balance=${balance}${code}${validation}${detail}`;
+  const phone = request.user.phoneNumber
+    ? ` phone=*${request.user.phoneNumber.slice(-4)}`
+    : "";
+  return `${shortRequestId(request.id)}${provider} ${request.type.toLowerCase()} ${request.amount} credits ${displayUser(request.user)} balance=${balance}${phone}${code}${validation}${detail}`;
 }
 
 function shortRequestId(requestId: string): string {

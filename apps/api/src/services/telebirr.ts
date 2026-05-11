@@ -7,6 +7,9 @@ export type TelebirrDepositInput = {
   transactionCode: string;
   transactionTime: string;
   receiptUrl: string;
+  senderPhoneNumber?: string | null;
+  telebirrMessage?: string | null;
+  parsedMessage?: TelebirrParsedMessage | null;
 };
 
 export type TelebirrValidationResult = {
@@ -16,6 +19,16 @@ export type TelebirrValidationResult = {
   payload: Record<string, unknown>;
 };
 
+export type TelebirrParsedMessage = {
+  senderName: string;
+  amountEtb: number;
+  receiverName: string;
+  receiverPhone: string;
+  transactionTime: string;
+  transactionCode: string;
+  receiptUrl: string;
+};
+
 const MAX_RECEIPT_BYTES = 1_000_000;
 
 export async function validateTelebirrDeposit(
@@ -23,6 +36,13 @@ export async function validateTelebirrDeposit(
 ): Promise<TelebirrValidationResult> {
   const url = normalizeTelebirrReceiptUrl(input.receiptUrl);
   const receiver = env.TELEBIRR_DEPOSIT_RECEIVER.trim();
+  const receiverPhone = normalizeTelebirrPhone(env.TELEBIRR_DEPOSIT_PHONE);
+  const senderPhone = normalizeTelebirrPhone(input.senderPhoneNumber ?? "");
+  const parsedMessage =
+    input.parsedMessage ??
+    (input.telebirrMessage
+      ? parseTelebirrMessage(input.telebirrMessage)
+      : null);
 
   if (!env.TELEBIRR_AUTO_DEPOSIT_ENABLED) {
     return manualReview("Telebirr auto deposit is disabled", url);
@@ -51,6 +71,21 @@ export async function validateTelebirrDeposit(
     codeMatched: receiptCompact.includes(compactAlphaNumeric(transactionCode)),
     timeMatched: timeMatches(input.transactionTime, receiptText),
     receiverMatched: receiptCompact.includes(compactAlphaNumeric(receiver)),
+    receiverPhoneMatched:
+      !receiverPhone ||
+      phoneMatchesText(receiptText, receiverPhone) ||
+      Boolean(
+        parsedMessage?.receiverPhone &&
+        maskedPhoneMatches(parsedMessage.receiverPhone, receiverPhone),
+      ),
+    senderPhoneMatched:
+      Boolean(senderPhone) && phoneMatchesText(receiptText, senderPhone),
+    messageSenderNameMatched:
+      !parsedMessage?.senderName ||
+      receiptCompact.includes(compactAlphaNumeric(parsedMessage.senderName)),
+    messageReceiverNameMatched:
+      !parsedMessage?.receiverName ||
+      receiptCompact.includes(compactAlphaNumeric(parsedMessage.receiverName)),
     amountMatched: parsedAmounts.some((value) =>
       moneyEquals(value, expectedEtb),
     ),
@@ -64,6 +99,19 @@ export async function validateTelebirrDeposit(
     expectedEtb,
     parsedAmounts,
     checks,
+    contactPhoneLast4: senderPhone ? senderPhone.slice(-4) : null,
+    receiverPhoneLast4: receiverPhone ? receiverPhone.slice(-4) : null,
+    message: parsedMessage
+      ? {
+          senderName: parsedMessage.senderName,
+          amountEtb: parsedMessage.amountEtb,
+          receiverName: parsedMessage.receiverName,
+          receiverPhone: parsedMessage.receiverPhone,
+          transactionTime: parsedMessage.transactionTime,
+          transactionCode: parsedMessage.transactionCode,
+          receiptUrl: parsedMessage.receiptUrl,
+        }
+      : null,
     receiptHash: sha256(html),
     fetchedAt: new Date().toISOString(),
   };
@@ -88,6 +136,55 @@ export async function validateTelebirrDeposit(
   };
 }
 
+export function parseTelebirrMessage(message: string): TelebirrParsedMessage {
+  const text = message.replace(/\s+/g, " ").trim();
+  if (!text) throw new AppError("Telebirr message is required");
+
+  const senderName =
+    text.match(/^Dear\s+(.+?)\s+You have transferred\b/i)?.[1]?.trim() ?? "";
+  const amountRaw =
+    text.match(/\btransferred\s+ETB\s+([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i)?.[1] ??
+    "";
+  const receiverMatch = text.match(
+    /\bto\s+(.+?)\s+\(([^)]+)\)\s+on\s+([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2}:[0-9]{2})/i,
+  );
+  const transactionCode =
+    text.match(/\btransaction number is\s+([A-Z0-9]+)/i)?.[1] ?? "";
+  const receiptUrl = cleanReceiptUrl(
+    text.match(
+      /https:\/\/transactioninfo\.ethiotelecom\.et\/receipt\/[A-Z0-9]+/i,
+    )?.[0] ?? "",
+  );
+  const amountEtb = parseMoney(amountRaw);
+
+  if (!senderName) throw new AppError("Could not read Telebirr sender name");
+  if (amountEtb === null)
+    throw new AppError("Could not read Telebirr transfer amount");
+  if (!receiverMatch?.[1] || !receiverMatch[2] || !receiverMatch[3]) {
+    throw new AppError("Could not read Telebirr receiver or transfer time");
+  }
+  if (!transactionCode)
+    throw new AppError("Could not read Telebirr transaction number");
+  if (!receiptUrl) throw new AppError("Could not read Telebirr receipt URL");
+
+  const normalizedCode = normalizeTelebirrTransactionCode(transactionCode);
+  const normalizedUrl = normalizeTelebirrReceiptUrl(receiptUrl).toString();
+  const codeFromUrl = receiptCodeFromUrl(normalizedUrl);
+  if (codeFromUrl && codeFromUrl !== normalizedCode) {
+    throw new AppError("Telebirr transaction code does not match receipt URL");
+  }
+
+  return {
+    senderName,
+    amountEtb,
+    receiverName: receiverMatch[1].trim(),
+    receiverPhone: receiverMatch[2].trim(),
+    transactionTime: receiverMatch[3].trim(),
+    transactionCode: normalizedCode,
+    receiptUrl: normalizedUrl,
+  };
+}
+
 export function normalizeTelebirrTransactionCode(value: string): string {
   const normalized = value
     .trim()
@@ -97,6 +194,15 @@ export function normalizeTelebirrTransactionCode(value: string): string {
     throw new AppError("Telebirr transaction code looks invalid");
   }
   return normalized;
+}
+
+export function normalizeTelebirrPhone(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("251")) return digits;
+  if (digits.startsWith("0")) return `251${digits.slice(1)}`;
+  if (digits.length === 9) return `251${digits}`;
+  return digits;
 }
 
 export function normalizeTelebirrReceiptUrl(value: string): URL {
@@ -209,8 +315,40 @@ function parseMoney(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function moneyEquals(actual: number, expected: number): boolean {
+export function moneyEquals(actual: number, expected: number): boolean {
   return Math.abs(actual - expected) < 0.01;
+}
+
+export function maskedPhoneMatches(
+  maskedOrFull: string,
+  fullPhone: string,
+): boolean {
+  const normalizedFull = normalizeTelebirrPhone(fullPhone);
+  if (!normalizedFull) return false;
+  const value = maskedOrFull.trim();
+  if (!value.includes("*") && !value.toLowerCase().includes("x")) {
+    return normalizeTelebirrPhone(value) === normalizedFull;
+  }
+
+  const [prefixRaw = "", suffixRaw = ""] = value.split(/[*xX]+/);
+  const prefix = normalizeTelebirrPhone(prefixRaw);
+  const suffix = suffixRaw.replace(/\D/g, "");
+  return (
+    (!prefix || normalizedFull.startsWith(prefix)) &&
+    (!suffix || normalizedFull.endsWith(suffix))
+  );
+}
+
+function phoneMatchesText(text: string, fullPhone: string): boolean {
+  const normalizedFull = normalizeTelebirrPhone(fullPhone);
+  if (!normalizedFull) return false;
+  const digits = text.replace(/\D/g, "");
+  if (digits.includes(normalizedFull)) return true;
+
+  const phoneCandidates = text.match(/\d{3,}[*xX]+\d{2,}/g) ?? [];
+  return phoneCandidates.some((candidate) =>
+    maskedPhoneMatches(candidate, normalizedFull),
+  );
 }
 
 function timeMatches(transactionTime: string, receiptText: string): boolean {
@@ -227,13 +365,51 @@ function timeMatches(transactionTime: string, receiptText: string): boolean {
 
 function receiptAgeOk(transactionTime: string): boolean {
   if (env.TELEBIRR_MAX_RECEIPT_AGE_HOURS === 0) return true;
-  const parsed = Date.parse(transactionTime);
+  const parsed =
+    parseTelebirrDateTime(transactionTime) ?? Date.parse(transactionTime);
   if (!Number.isFinite(parsed)) return true;
 
   const ageMs = Date.now() - parsed;
   const maxAgeMs = env.TELEBIRR_MAX_RECEIPT_AGE_HOURS * 60 * 60 * 1000;
   const futureToleranceMs = 12 * 60 * 60 * 1000;
   return ageMs >= -futureToleranceMs && ageMs <= maxAgeMs;
+}
+
+function parseTelebirrDateTime(value: string): number | null {
+  const match = value.match(
+    /^\s*([0-9]{1,2})\/([0-9]{1,2})\/([0-9]{4})\s+([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?\s*$/,
+  );
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? 0);
+  const timestamp = new Date(
+    year,
+    month - 1,
+    day,
+    hour,
+    minute,
+    second,
+  ).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function cleanReceiptUrl(value: string): string {
+  return value.trim().replace(/[).,\s]+$/g, "");
+}
+
+function receiptCodeFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const code = url.pathname.split("/").filter(Boolean).at(-1);
+    return code ? normalizeTelebirrTransactionCode(code) : null;
+  } catch {
+    return null;
+  }
 }
 
 function manualReview(reason: string, url?: URL): TelebirrValidationResult {

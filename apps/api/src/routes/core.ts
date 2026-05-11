@@ -47,9 +47,11 @@ const walletRequestBodySchema = z.object({
 });
 
 const telebirrDepositBodySchema = walletRequestBodySchema.extend({
-  transactionCode: z.string().min(6).max(80),
-  transactionTime: z.string().min(6).max(120),
-  receiptUrl: z.string().url().max(500),
+  transactionCode: z.string().min(6).max(80).optional(),
+  transactionTime: z.string().min(6).max(120).optional(),
+  receiptUrl: z.string().url().max(500).optional(),
+  telebirrMessage: z.string().min(20).max(3000).optional(),
+  senderPhoneNumber: z.string().max(32).optional(),
 });
 
 export async function registerCoreRoutes(
@@ -259,6 +261,10 @@ export async function registerCoreRoutes(
     { preHandler: fastify.authenticate },
     async (request) => {
       const body = telebirrDepositBodySchema.parse(request.body ?? {});
+      const user = await prisma.user.findUnique({
+        where: { id: request.user!.id },
+        select: { phoneNumber: true },
+      });
       const walletRequest = await createWalletRequest({
         userId: request.user!.id,
         type: "DEPOSIT",
@@ -267,6 +273,8 @@ export async function registerCoreRoutes(
         transactionCode: body.transactionCode,
         transactionTime: body.transactionTime,
         receiptUrl: body.receiptUrl,
+        telebirrMessage: body.telebirrMessage,
+        senderPhoneNumber: user?.phoneNumber ?? null,
       });
       return toWalletRequestDto(walletRequest);
     },

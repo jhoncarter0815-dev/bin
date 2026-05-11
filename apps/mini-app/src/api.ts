@@ -42,9 +42,11 @@ export type AuditEntryDto = {
 export type DepositRequestInput = {
   amount: number;
   details?: string;
-  transactionCode: string;
-  transactionTime: string;
-  receiptUrl: string;
+  transactionCode?: string;
+  transactionTime?: string;
+  receiptUrl?: string;
+  telebirrMessage?: string;
+  senderPhoneNumber?: string;
 };
 
 export function getToken(): string | null {

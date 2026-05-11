@@ -44,6 +44,8 @@ export async function registerAdminRoutes(
       username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
+      phoneNumber: user.phoneNumber,
+      phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
       isAdmin: user.isAdmin,
       isBanned: user.isBanned,
       wallet: user.wallet

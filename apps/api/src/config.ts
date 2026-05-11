@@ -30,6 +30,7 @@ const schema = z.object({
     .optional()
     .or(z.literal(""))
     .default(""),
+  TELEBIRR_DEPOSIT_PHONE: z.string().optional().or(z.literal("")).default(""),
   TELEBIRR_RECEIPT_ALLOWED_HOSTS: z
     .string()
     .default("transactioninfo.ethiotelecom.et"),

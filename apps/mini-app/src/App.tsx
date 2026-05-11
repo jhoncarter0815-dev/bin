@@ -405,6 +405,7 @@ export function App() {
                 transactionCode: telebirr?.transactionCode ?? "",
                 transactionTime: telebirr?.transactionTime ?? "",
                 receiptUrl: telebirr?.receiptUrl ?? "",
+                telebirrMessage: telebirr?.telebirrMessage ?? "",
               })
             : await endpoints.requestWithdraw(amount, details);
         setWalletRequests((current) => [
@@ -1098,10 +1099,12 @@ function WalletPage({
   const [transactionCode, setTransactionCode] = useState("");
   const [transactionTime, setTransactionTime] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
+  const [telebirrMessage, setTelebirrMessage] = useState("");
   const numericAmount = Number(amount);
   const validAmount = Number.isInteger(numericAmount) && numericAmount > 0;
   const depositReady =
     mode === "withdraw" ||
+    telebirrMessage.trim().length >= 20 ||
     (transactionCode.trim().length >= 6 &&
       transactionTime.trim().length >= 6 &&
       receiptUrl.trim().length >= 12);
@@ -1123,6 +1126,7 @@ function WalletPage({
             transactionCode,
             transactionTime,
             receiptUrl,
+            telebirrMessage,
           }
         : undefined,
     );
@@ -1131,6 +1135,7 @@ function WalletPage({
     setTransactionCode("");
     setTransactionTime("");
     setReceiptUrl("");
+    setTelebirrMessage("");
   }
 
   return (
@@ -1196,6 +1201,17 @@ function WalletPage({
 
         {mode === "deposit" && (
           <div className="telebirr-fields">
+            <label className="field-label">
+              <span>Full Telebirr message</span>
+              <textarea
+                maxLength={3000}
+                placeholder="Paste the full Telebirr SMS after you pay"
+                value={telebirrMessage}
+                onChange={(event) =>
+                  setTelebirrMessage(event.currentTarget.value)
+                }
+              />
+            </label>
             <label className="field-label">
               <span>Telebirr transaction code</span>
               <input

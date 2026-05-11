@@ -4,12 +4,18 @@ import type {
   WalletRequestStatus,
   WalletRequestType,
 } from "@prisma/client";
+import { env } from "../config.js";
 import { AppError, ConflictError, NotFoundError } from "../errors.js";
 import { prisma } from "../prisma.js";
 import { logAudit } from "./audit.js";
 import {
+  maskedPhoneMatches,
+  moneyEquals,
   normalizeTelebirrReceiptUrl,
+  normalizeTelebirrPhone,
   normalizeTelebirrTransactionCode,
+  parseTelebirrMessage,
+  type TelebirrParsedMessage,
   validateTelebirrDeposit,
 } from "./telebirr.js";
 import { creditWallet, debitWallet } from "./wallet.js";
@@ -29,6 +35,8 @@ export async function createWalletRequest(input: {
   transactionCode?: string | null;
   transactionTime?: string | null;
   receiptUrl?: string | null;
+  telebirrMessage?: string | null;
+  senderPhoneNumber?: string | null;
 }) {
   assertWalletAmount(input.amount);
 
@@ -71,20 +79,38 @@ async function createTelebirrDepositRequest(input: {
   transactionCode?: string | null;
   transactionTime?: string | null;
   receiptUrl?: string | null;
+  telebirrMessage?: string | null;
+  senderPhoneNumber?: string | null;
 }) {
+  const parsedMessage = input.telebirrMessage
+    ? parseTelebirrMessage(input.telebirrMessage)
+    : null;
   const transactionCode = normalizeTelebirrTransactionCode(
     requiredText(
-      input.transactionCode,
+      input.transactionCode ?? parsedMessage?.transactionCode,
       "Telebirr transaction code is required",
     ),
   );
   const transactionTime = requiredText(
-    input.transactionTime,
+    input.transactionTime ?? parsedMessage?.transactionTime,
     "Telebirr transaction time is required",
   ).slice(0, 120);
   const receiptUrl = normalizeTelebirrReceiptUrl(
-    requiredText(input.receiptUrl, "Telebirr receipt URL is required"),
+    requiredText(
+      input.receiptUrl ?? parsedMessage?.receiptUrl,
+      "Telebirr receipt URL is required",
+    ),
   ).toString();
+  const expectedEtb = input.amount / env.TELEBIRR_CREDIT_PER_ETB;
+
+  if (parsedMessage) {
+    assertParsedMessageMatchesDeposit({
+      parsedMessage,
+      transactionCode,
+      receiptUrl,
+      expectedEtb,
+    });
+  }
 
   const duplicate = await prisma.walletRequest.findFirst({
     where: {
@@ -103,6 +129,8 @@ async function createTelebirrDepositRequest(input: {
     transactionCode,
     transactionTime,
     receiptUrl,
+    senderPhoneNumber: input.senderPhoneNumber,
+    parsedMessage,
   });
 
   try {
@@ -113,7 +141,9 @@ async function createTelebirrDepositRequest(input: {
           type: "DEPOSIT",
           status: validation.autoApprove ? "APPROVED" : "PENDING",
           amount: input.amount,
-          details: cleanText(input.details),
+          details: cleanText(
+            input.details ?? (parsedMessage ? "Telebirr SMS submitted" : null),
+          ),
           provider: "TELEBIRR",
           transactionCode,
           transactionTime,
@@ -136,6 +166,9 @@ async function createTelebirrDepositRequest(input: {
             provider: "TELEBIRR",
             transactionCode,
             receiptUrl,
+            senderPhoneLast4: normalizeTelebirrPhone(
+              input.senderPhoneNumber ?? "",
+            ).slice(-4),
           },
         });
       }
@@ -149,6 +182,9 @@ async function createTelebirrDepositRequest(input: {
         metadata: {
           amount: input.amount,
           transactionCode,
+          senderPhoneLast4: normalizeTelebirrPhone(
+            input.senderPhoneNumber ?? "",
+          ).slice(-4),
           validationStatus: validation.status,
           validationReason: validation.reason,
         },
@@ -190,6 +226,7 @@ export function listPendingWalletRequests() {
           username: true,
           firstName: true,
           lastName: true,
+          phoneNumber: true,
           wallet: true,
         },
       },
@@ -389,6 +426,60 @@ function requiredText(
   const text = value?.trim();
   if (!text) throw new AppError(message);
   return text;
+}
+
+function assertParsedMessageMatchesDeposit(input: {
+  parsedMessage: TelebirrParsedMessage;
+  transactionCode: string;
+  receiptUrl: string;
+  expectedEtb: number;
+}): void {
+  const { parsedMessage, transactionCode, receiptUrl, expectedEtb } = input;
+  if (parsedMessage.transactionCode !== transactionCode) {
+    throw new AppError("Telebirr message transaction code does not match");
+  }
+
+  const urlCode = receiptUrlCode(receiptUrl);
+  if (urlCode && urlCode !== transactionCode) {
+    throw new AppError("Telebirr receipt URL does not match transaction code");
+  }
+
+  if (!moneyEquals(parsedMessage.amountEtb, expectedEtb)) {
+    throw new AppError("Telebirr message amount does not match deposit amount");
+  }
+
+  const receiver = env.TELEBIRR_DEPOSIT_RECEIVER.trim();
+  if (receiver) {
+    const expectedReceiver = compactText(receiver);
+    const actualReceiver = compactText(parsedMessage.receiverName);
+    if (
+      !actualReceiver.includes(expectedReceiver) &&
+      !expectedReceiver.includes(actualReceiver)
+    ) {
+      throw new AppError("Telebirr message receiver does not match this bot");
+    }
+  }
+
+  const receiverPhone = normalizeTelebirrPhone(env.TELEBIRR_DEPOSIT_PHONE);
+  if (
+    receiverPhone &&
+    !maskedPhoneMatches(parsedMessage.receiverPhone, receiverPhone)
+  ) {
+    throw new AppError("Telebirr message receiver phone does not match");
+  }
+}
+
+function receiptUrlCode(receiptUrl: string): string | null {
+  try {
+    const code = new URL(receiptUrl).pathname.split("/").filter(Boolean).at(-1);
+    return code ? normalizeTelebirrTransactionCode(code) : null;
+  } catch {
+    return null;
+  }
+}
+
+function compactText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function walletRequestTarget(requestId: string): string {
