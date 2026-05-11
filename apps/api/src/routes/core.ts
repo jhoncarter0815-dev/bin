@@ -256,6 +256,18 @@ export async function registerCoreRoutes(
     },
   );
 
+  fastify.get(
+    "/api/wallet/deposit-info",
+    { preHandler: fastify.authenticate },
+    async () => {
+      return {
+        receiverName: env.TELEBIRR_DEPOSIT_RECEIVER || "Bingo Core",
+        receiverPhone: env.TELEBIRR_DEPOSIT_PHONE,
+        creditPerEtb: env.TELEBIRR_CREDIT_PER_ETB,
+      };
+    },
+  );
+
   fastify.post(
     "/api/wallet/deposit",
     { preHandler: fastify.authenticate },

@@ -49,6 +49,12 @@ export type DepositRequestInput = {
   senderPhoneNumber?: string;
 };
 
+export type DepositInfoDto = {
+  receiverName: string;
+  receiverPhone: string;
+  creditPerEtb: number;
+};
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -114,6 +120,7 @@ export const endpoints = {
   history: () => api<MatchResultDto[]>("/api/matches/history"),
   wallet: () => api<WalletDto>("/api/wallet"),
   walletRequests: () => api<WalletRequestDto[]>("/api/wallet/requests"),
+  depositInfo: () => api<DepositInfoDto>("/api/wallet/deposit-info"),
   requestDeposit: (input: DepositRequestInput) =>
     api<WalletRequestDto>("/api/wallet/deposit", {
       method: "POST",

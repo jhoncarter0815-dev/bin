@@ -1045,6 +1045,45 @@ button {
   background: rgba(100, 228, 239, 0.045);
 }
 
+.telebirr-recipient,
+.deposit-summary {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.72rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.telebirr-recipient span,
+.deposit-summary span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.telebirr-recipient strong,
+.deposit-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--green);
+  font-size: 1.05rem;
+  font-weight: 950;
+}
+
+.telebirr-recipient b {
+  overflow-wrap: anywhere;
+  color: var(--cyan);
+  font-size: 0.95rem;
+}
+
+.telebirr-recipient small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
 .wallet-request-row > div:first-child,
 .list-row > div:first-child {
   display: grid;

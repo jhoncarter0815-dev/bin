@@ -37,6 +37,7 @@ import {
   authenticate,
   endpoints,
   type AuditEntryDto,
+  type DepositInfoDto,
   type DepositRequestInput,
   type FairProofDto,
   type Session,
@@ -402,9 +403,6 @@ export function App() {
             ? await endpoints.requestDeposit({
                 amount,
                 details,
-                transactionCode: telebirr?.transactionCode ?? "",
-                transactionTime: telebirr?.transactionTime ?? "",
-                receiptUrl: telebirr?.receiptUrl ?? "",
                 telebirrMessage: telebirr?.telebirrMessage ?? "",
               })
             : await endpoints.requestWithdraw(amount, details);
@@ -1094,48 +1092,54 @@ function WalletPage({
   onCancelRequest: (requestId: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
+  const [depositStep, setDepositStep] = useState<"amount" | "message">(
+    "amount",
+  );
+  const [depositInfo, setDepositInfo] = useState<DepositInfoDto | null>(null);
   const [amount, setAmount] = useState("");
   const [details, setDetails] = useState("");
-  const [transactionCode, setTransactionCode] = useState("");
-  const [transactionTime, setTransactionTime] = useState("");
-  const [receiptUrl, setReceiptUrl] = useState("");
   const [telebirrMessage, setTelebirrMessage] = useState("");
   const numericAmount = Number(amount);
   const validAmount = Number.isInteger(numericAmount) && numericAmount > 0;
+  const creditPerEtb = depositInfo?.creditPerEtb ?? 1;
+  const depositCredits = Math.round(numericAmount * creditPerEtb);
   const depositReady =
-    mode === "withdraw" ||
-    telebirrMessage.trim().length >= 20 ||
-    (transactionCode.trim().length >= 6 &&
-      transactionTime.trim().length >= 6 &&
-      receiptUrl.trim().length >= 12);
+    mode === "withdraw" || telebirrMessage.trim().length >= 20;
+  const canSubmit =
+    validAmount &&
+    (mode === "withdraw" || depositStep === "amount" || depositReady);
   const actionLabel = mode === "deposit" ? "Deposit" : "Withdraw";
 
   useEffect(() => {
     void onRefresh();
+    void endpoints
+      .depositInfo()
+      .then(setDepositInfo)
+      .catch(() => undefined);
   }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!validAmount || !depositReady) return;
+    if (!validAmount) return;
+    if (mode === "deposit" && depositStep === "amount") {
+      setDepositStep("message");
+      return;
+    }
+    if (!depositReady) return;
     await onSubmitRequest(
       mode,
-      numericAmount,
-      details,
+      mode === "deposit" ? depositCredits : numericAmount,
+      mode === "deposit" ? "" : details,
       mode === "deposit"
         ? {
-            transactionCode,
-            transactionTime,
-            receiptUrl,
             telebirrMessage,
           }
         : undefined,
     );
     setAmount("");
     setDetails("");
-    setTransactionCode("");
-    setTransactionTime("");
-    setReceiptUrl("");
     setTelebirrMessage("");
+    setDepositStep("amount");
   }
 
   return (
@@ -1155,7 +1159,10 @@ function WalletPage({
           <button
             type="button"
             className={mode === "deposit" ? "active" : ""}
-            onClick={() => setMode("deposit")}
+            onClick={() => {
+              setMode("deposit");
+              setDepositStep("amount");
+            }}
           >
             <ArrowDownToLine size={17} />
             Deposit
@@ -1163,102 +1170,95 @@ function WalletPage({
           <button
             type="button"
             className={mode === "withdraw" ? "active" : ""}
-            onClick={() => setMode("withdraw")}
+            onClick={() => {
+              setMode("withdraw");
+              setDepositStep("amount");
+            }}
           >
             <ArrowUpFromLine size={17} />
             Withdraw
           </button>
         </div>
 
-        <label className="field-label">
-          <span>Amount</span>
-          <input
-            inputMode="numeric"
-            min="1"
-            pattern="[0-9]*"
-            placeholder="Credits"
-            value={amount}
-            onChange={(event) =>
-              setAmount(event.currentTarget.value.replace(/\D/g, ""))
-            }
-          />
-        </label>
-        <label className="field-label">
-          <span>
-            {mode === "deposit" ? "Payment proof or note" : "Payout details"}
-          </span>
-          <textarea
-            maxLength={500}
-            placeholder={
-              mode === "deposit"
-                ? "Transaction ID, sender name, or support note"
-                : "Wallet address, bank note, or support instruction"
-            }
-            value={details}
-            onChange={(event) => setDetails(event.currentTarget.value)}
-          />
-        </label>
-
-        {mode === "deposit" && (
-          <div className="telebirr-fields">
+        {mode === "deposit" ? (
+          <>
+            <div className="telebirr-recipient">
+              <span>Telebirr</span>
+              <strong>{depositInfo?.receiverName ?? "Bingo Core"}</strong>
+              <b>{depositInfo?.receiverPhone || "Not configured"}</b>
+              <small>1 ETB = {creditPerEtb} CR</small>
+            </div>
             <label className="field-label">
-              <span>Full Telebirr message</span>
+              <span>Amount</span>
+              <input
+                inputMode="numeric"
+                min="1"
+                pattern="[0-9]*"
+                placeholder="ETB"
+                value={amount}
+                onChange={(event) =>
+                  setAmount(event.currentTarget.value.replace(/\D/g, ""))
+                }
+              />
+            </label>
+            {depositStep === "message" && (
+              <div className="telebirr-fields">
+                <div className="deposit-summary">
+                  <span>Amount</span>
+                  <strong>
+                    ETB {numericAmount.toLocaleString()} / {depositCredits} CR
+                  </strong>
+                </div>
+                <label className="field-label">
+                  <span>Full Telebirr message</span>
+                  <textarea
+                    maxLength={3000}
+                    placeholder="Paste the full Telebirr SMS after you pay"
+                    value={telebirrMessage}
+                    onChange={(event) =>
+                      setTelebirrMessage(event.currentTarget.value)
+                    }
+                  />
+                </label>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <label className="field-label">
+              <span>Amount</span>
+              <input
+                inputMode="numeric"
+                min="1"
+                pattern="[0-9]*"
+                placeholder="Credits"
+                value={amount}
+                onChange={(event) =>
+                  setAmount(event.currentTarget.value.replace(/\D/g, ""))
+                }
+              />
+            </label>
+            <label className="field-label">
+              <span>Payout details</span>
               <textarea
-                maxLength={3000}
-                placeholder="Paste the full Telebirr SMS after you pay"
-                value={telebirrMessage}
-                onChange={(event) =>
-                  setTelebirrMessage(event.currentTarget.value)
-                }
+                maxLength={500}
+                placeholder="Wallet address, bank note, or support instruction"
+                value={details}
+                onChange={(event) => setDetails(event.currentTarget.value)}
               />
             </label>
-            <label className="field-label">
-              <span>Telebirr transaction code</span>
-              <input
-                autoCapitalize="characters"
-                placeholder="BHV3BNI9ON"
-                value={transactionCode}
-                onChange={(event) =>
-                  setTransactionCode(
-                    event.currentTarget.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9]/g, ""),
-                  )
-                }
-              />
-            </label>
-            <label className="field-label">
-              <span>Transaction time</span>
-              <input
-                placeholder="2026-05-10 20:42"
-                value={transactionTime}
-                onChange={(event) =>
-                  setTransactionTime(event.currentTarget.value)
-                }
-              />
-            </label>
-            <label className="field-label">
-              <span>Receipt validation URL</span>
-              <input
-                inputMode="url"
-                placeholder="https://transactioninfo.ethiotelecom.et/receipt/..."
-                value={receiptUrl}
-                onChange={(event) => setReceiptUrl(event.currentTarget.value)}
-              />
-            </label>
-          </div>
+          </>
         )}
 
-        <button
-          className="primary-action"
-          disabled={!validAmount || !depositReady}
-        >
+        <button className="primary-action" disabled={!canSubmit}>
           {mode === "deposit" ? (
             <ArrowDownToLine size={18} />
           ) : (
             <ArrowUpFromLine size={18} />
           )}
-          Request {actionLabel}
+          {mode === "deposit" && depositStep === "amount"
+            ? "Continue"
+            : `Request ${actionLabel}`}
         </button>
       </form>
 
