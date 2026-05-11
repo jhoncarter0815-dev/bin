@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 process.env.DATABASE_URL ??= "postgresql://user:pass@localhost:5432/bingo";
 process.env.JWT_SECRET ??= "test-jwt-secret-with-enough-length";
@@ -6,8 +6,15 @@ process.env.ADMIN_SECRET ??= "test-admin-secret";
 process.env.TELEGRAM_BOT_TOKEN ??= "123456:test-token";
 process.env.TELEBIRR_RECEIPT_ALLOWED_HOSTS ??=
   "transactioninfo.ethiotelecom.et";
+process.env.TELEBIRR_DEPOSIT_RECEIVER ??= "core bingo";
+process.env.TELEBIRR_DEPOSIT_PHONE ??= "251900000000";
 
-const { parseTelebirrMessage } = await import("./telebirr.js");
+const { parseTelebirrMessage, validateTelebirrDeposit } =
+  await import("./telebirr.js");
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("parseTelebirrMessage", () => {
   it("accepts Telebirr messages without the Dear sender line", () => {
@@ -47,5 +54,42 @@ describe("parseTelebirrMessage", () => {
     );
 
     expect(parsed.senderName).toBe("KALEAB");
+  });
+});
+
+describe("validateTelebirrDeposit", () => {
+  it("sends aborted receipt checks to manual review with a clear reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw Object.assign(new Error("This operation was aborted"), {
+          name: "AbortError",
+        });
+      }),
+    );
+
+    const result = await validateTelebirrDeposit({
+      amount: 1000,
+      transactionCode: "DE99PVJ1U3",
+      transactionTime: "09/05/2026 14:07:49",
+      receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DE99PVJ1U3",
+      senderPhoneNumber: "251911111111",
+      parsedMessage: {
+        senderName: null,
+        amountEtb: 1000,
+        receiverName: "core bingo",
+        receiverPhone: "2519****0000",
+        transactionTime: "09/05/2026 14:07:49",
+        transactionCode: "DE99PVJ1U3",
+        receiptUrl:
+          "https://transactioninfo.ethiotelecom.et/receipt/DE99PVJ1U3",
+      },
+    });
+
+    expect(result).toMatchObject({
+      autoApprove: false,
+      status: "MANUAL_REVIEW",
+      reason: "Telebirr receipt validation timed out",
+    });
   });
 });

@@ -260,6 +260,9 @@ async function fetchReceiptHtml(url: URL): Promise<string> {
     }
     return html;
   } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Telebirr receipt validation timed out");
+    }
     if (error instanceof Error) {
       throw new Error(`Could not validate Telebirr receipt: ${error.message}`);
     }
@@ -422,6 +425,14 @@ function manualReview(reason: string, url?: URL): TelebirrValidationResult {
       fetchedAt: new Date().toISOString(),
     },
   };
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      error.message.toLowerCase().includes("aborted"))
+  );
 }
 
 function compactAlphaNumeric(value: string): string {

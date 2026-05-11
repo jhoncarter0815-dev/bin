@@ -747,14 +747,14 @@ async function finishDepositFromTelebirrMessage(
       supportKeyboard(),
     );
   } catch (error) {
-    await ctx.reply(
-      [
-        error instanceof Error
-          ? error.message
-          : "Could not read that Telebirr message.",
-        "Please paste the full Telebirr message again, including the receipt link.",
-      ].join("\n"),
-    );
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Could not read that Telebirr message.";
+    const retryInstruction = message.toLowerCase().includes("receiver phone")
+      ? `Please send the payment to the exact Telebirr number shown by the bot: ${env.TELEBIRR_DEPOSIT_PHONE}.`
+      : "Please paste the full Telebirr message again, including the receipt link.";
+    await ctx.reply([message, retryInstruction].join("\n"));
   }
 }
 
