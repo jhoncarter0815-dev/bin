@@ -1,0 +1,51 @@
+import { describe, expect, it } from "vitest";
+
+process.env.DATABASE_URL ??= "postgresql://user:pass@localhost:5432/bingo";
+process.env.JWT_SECRET ??= "test-jwt-secret-with-enough-length";
+process.env.ADMIN_SECRET ??= "test-admin-secret";
+process.env.TELEGRAM_BOT_TOKEN ??= "123456:test-token";
+process.env.TELEBIRR_RECEIPT_ALLOWED_HOSTS ??=
+  "transactioninfo.ethiotelecom.et";
+
+const { parseTelebirrMessage } = await import("./telebirr.js");
+
+describe("parseTelebirrMessage", () => {
+  it("accepts Telebirr messages without the Dear sender line", () => {
+    const parsed = parseTelebirrMessage(
+      [
+        "You have transferred ETB 1,000.00 to core bingo (2519****7282) on 09/05/2026 14:07:49.",
+        "Your transaction number is DE99PVJ1U3.",
+        "The service fee is ETB 3.48 and 15% VAT on the service fee is ETB 0.52.",
+        "Your current E-Money Account balance is ETB 8,248.87.",
+        "To download your payment information please click this link:",
+        "https://transactioninfo.ethiotelecom.et/receipt/DE99PVJ1U3.",
+        "Thank you for using telebirr",
+        "Ethio telecom",
+      ].join(" "),
+    );
+
+    expect(parsed).toMatchObject({
+      senderName: null,
+      amountEtb: 1000,
+      receiverName: "core bingo",
+      receiverPhone: "2519****7282",
+      transactionTime: "09/05/2026 14:07:49",
+      transactionCode: "DE99PVJ1U3",
+      receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DE99PVJ1U3",
+    });
+  });
+
+  it("keeps the sender name when Telebirr includes it", () => {
+    const parsed = parseTelebirrMessage(
+      [
+        "Dear KALEAB",
+        "You have transferred ETB 100.00 to Core Bingo (2519****7282) on 09/05/2026 14:07:49.",
+        "Your transaction number is DE99PVJ1U3.",
+        "To download your payment information please click this link:",
+        "https://transactioninfo.ethiotelecom.et/receipt/DE99PVJ1U3.",
+      ].join(" "),
+    );
+
+    expect(parsed.senderName).toBe("KALEAB");
+  });
+});

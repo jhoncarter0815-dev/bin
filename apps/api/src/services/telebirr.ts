@@ -20,7 +20,7 @@ export type TelebirrValidationResult = {
 };
 
 export type TelebirrParsedMessage = {
-  senderName: string;
+  senderName: string | null;
   amountEtb: number;
   receiverName: string;
   receiverPhone: string;
@@ -157,7 +157,6 @@ export function parseTelebirrMessage(message: string): TelebirrParsedMessage {
   );
   const amountEtb = parseMoney(amountRaw);
 
-  if (!senderName) throw new AppError("Could not read Telebirr sender name");
   if (amountEtb === null)
     throw new AppError("Could not read Telebirr transfer amount");
   if (!receiverMatch?.[1] || !receiverMatch[2] || !receiverMatch[3]) {
@@ -175,7 +174,7 @@ export function parseTelebirrMessage(message: string): TelebirrParsedMessage {
   }
 
   return {
-    senderName,
+    senderName: senderName || null,
     amountEtb,
     receiverName: receiverMatch[1].trim(),
     receiverPhone: receiverMatch[2].trim(),
