@@ -216,6 +216,32 @@ button {
   font-weight: 800;
 }
 
+.instruction-note {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid rgba(100, 228, 239, 0.16);
+  border-radius: 0.82rem;
+  color: #c9d7eb;
+  background: rgba(100, 228, 239, 0.06);
+}
+
+.instruction-note.compact {
+  padding: 0.56rem 0.68rem;
+}
+
+.instruction-note p {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 820;
+  line-height: 1.32;
+}
+
+.instruction-note p[lang="am"] {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 .hero-panel {
   position: relative;
   min-height: 18.4rem;
@@ -1207,16 +1233,45 @@ button {
 }
 
 .game-screen .switch-row {
-  min-height: clamp(1.86rem, 4.25dvh, 2.16rem);
-  padding: 0.28rem 0.42rem 0.28rem 0.58rem;
+  min-height: clamp(2.25rem, 5.6dvh, 2.85rem);
+  padding: 0.24rem 0.42rem 0.24rem 0.58rem;
   font-size: 0.72rem;
 }
 
-.switch-row span {
+.switch-row > span {
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
   min-width: 0;
+}
+
+.switch-row .switch-copy {
+  display: grid;
+  gap: 0.04rem;
+  align-items: center;
+}
+
+.switch-row .switch-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-width: 0;
+}
+
+.switch-row small {
+  display: block;
+  overflow: hidden;
+  color: rgba(255, 217, 106, 0.78);
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.game-screen .switch-row small {
+  font-size: clamp(0.48rem, 1.25dvh, 0.56rem);
 }
 
 .switch-row input {

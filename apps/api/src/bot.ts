@@ -27,8 +27,10 @@ import { upsertTelegramUser } from "./services/users.js";
 
 export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
-const MAIN_MENU_TEXT =
-  "Bingo Core menu\nChoose an action below to play, manage credits, get help, or invite friends.";
+const MAIN_MENU_TEXT = bi(
+  "Bingo Core menu\nChoose an action below to play, manage credits, get help, or invite friends.",
+  "የBingo Core ሜኑ\nለመጫወት፣ ክሬዲት ለማስተዳደር፣ እገዛ ለማግኘት ወይም ጓደኞችን ለመጋበዝ ከታች ይምረጡ።",
+);
 const ADMIN_MENU_TEXT =
   "Admin tools\nUse these controls to inspect the live bot and run safe operational actions.";
 const RECENT_PIN_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -48,7 +50,10 @@ bot.command("menu", async (ctx) => {
 
 bot.command("play", async (ctx) => {
   await ctx.reply(
-    "Open the Mini App to join the current public room.",
+    bi(
+      "Open the Mini App to join the current public room.",
+      "የአሁኑን የሕዝብ ክፍል ለመቀላቀል Mini App ይክፈቱ።",
+    ),
     Markup.inlineKeyboard([Markup.button.webApp("Play Bingo", miniAppUrl())]),
   );
 });
@@ -465,19 +470,27 @@ async function sendAdminMenu(ctx: Context): Promise<void> {
 
 async function replyDeposit(ctx: Context): Promise<void> {
   if (!isPrivateChat(ctx)) {
-    await ctx.reply("Open a private chat with the bot to deposit safely.");
+    await ctx.reply(
+      bi(
+        "Open a private chat with the bot to deposit safely.",
+        "በደህንነት ለማስገባት ከቦቱ ጋር የግል ቻት ይክፈቱ።",
+      ),
+    );
     return;
   }
   await startDepositFlow(ctx);
 }
 
 async function replyWithdraw(ctx: Context): Promise<void> {
+  const fallback =
+    "Open the Mini App Wallet tab, submit a withdrawal request, and add your payout details. An admin will verify your available balance before approving it.";
   await ctx.reply(
     [
-      "Withdraw",
-      walletInstruction(
-        env.WITHDRAW_INSTRUCTIONS,
-        "Open the Mini App Wallet tab, submit a withdrawal request, and add your payout details. An admin will verify your available balance before approving it.",
+      "Withdraw / ማውጣት",
+      walletInstruction(env.WITHDRAW_INSTRUCTIONS, fallback),
+      bi(
+        "Use exact payout details so admins can process the request faster.",
+        "አድሚኖች በፍጥነት እንዲያስኬዱት ትክክለኛ የመቀበያ መረጃ ያስገቡ።",
       ),
       supportContactText(),
     ].join("\n"),
@@ -488,7 +501,10 @@ async function replyWithdraw(ctx: Context): Promise<void> {
 async function startDepositFlow(ctx: Context): Promise<void> {
   if (!env.TELEBIRR_DEPOSIT_PHONE.trim()) {
     await ctx.reply(
-      "Telebirr deposit phone is not configured yet. Please contact support.",
+      bi(
+        "Telebirr deposit phone is not configured yet. Please contact support.",
+        "የTelebirr መግቢያ ቁጥር ገና አልተዘጋጀም። እባክዎ ድጋፍን ያግኙ።",
+      ),
       supportKeyboard(),
     );
     return;
@@ -554,7 +570,10 @@ async function handleDepositContact(ctx: Context): Promise<void> {
 
   if (contact.user_id !== ctx.from.id) {
     await ctx.reply(
-      "Please share your own Telegram contact using the button. Deposits must come from your saved phone number.",
+      bi(
+        "Please share your own Telegram contact using the button. Deposits must come from your saved phone number.",
+        "እባክዎ በአዝራሩ የራስዎን Telegram ኮንታክት ያጋሩ። ክፍያው ከተቀመጠው የስልክ ቁጥርዎ መመጣት አለበት።",
+      ),
     );
     return;
   }
@@ -606,7 +625,10 @@ async function handleDepositContact(ctx: Context): Promise<void> {
   });
 
   await ctx.reply(
-    `Saved phone ending ${phoneNumber.slice(-4)}. Deposits must be sent from this Telebirr number.`,
+    bi(
+      `Saved phone ending ${phoneNumber.slice(-4)}. Deposits must be sent from this Telebirr number.`,
+      `በ${phoneNumber.slice(-4)} የሚያልቀው ስልክ ተቀመጠ። ክፍያዎች ከዚህ የTelebirr ቁጥር መላክ አለባቸው።`,
+    ),
     Markup.removeKeyboard(),
   );
   await askForDepositAmount(ctx);
@@ -641,7 +663,12 @@ async function handleDepositText(ctx: Context): Promise<void> {
   if (session.step === "AMOUNT") {
     const amountEtb = parseDepositEtb(text);
     if (!amountEtb) {
-      await ctx.reply("Send the deposit amount as a number, for example: 1000");
+      await ctx.reply(
+        bi(
+          "Send the deposit amount as a number, for example: 1000",
+          "የማስገቢያ መጠንን በቁጥር ይላኩ፣ ለምሳሌ፦ 1000",
+        ),
+      );
       return;
     }
 
@@ -666,7 +693,10 @@ async function handleDepositText(ctx: Context): Promise<void> {
         `Send ETB ${formatEtb(amountEtb)} to:`,
         `${env.TELEBIRR_DEPOSIT_RECEIVER || "Bingo Core"} ${env.TELEBIRR_DEPOSIT_PHONE}`,
         "",
-        "After payment, paste the full Telebirr message exactly as you received it.",
+        bi(
+          "After payment, paste the full Telebirr message exactly as you received it.",
+          "ከከፈሉ በኋላ የTelebirr መልዕክቱን እንደተቀበሉት ሙሉ በሙሉ ይለጥፉ።",
+        ),
       ].join("\n"),
       Markup.removeKeyboard(),
     );
@@ -710,7 +740,10 @@ async function finishDepositFromTelebirrMessage(
       !moneyEquals(parsed.amountEtb, requestedEtb)
     ) {
       await ctx.reply(
-        `The Telebirr message says ETB ${formatEtb(parsed.amountEtb)}, but you entered ETB ${formatEtb(requestedEtb)}. Start again with /deposit if the amount changed.`,
+        bi(
+          `The Telebirr message says ETB ${formatEtb(parsed.amountEtb)}, but you entered ETB ${formatEtb(requestedEtb)}. Start again with /deposit if the amount changed.`,
+          `የTelebirr መልዕክቱ ETB ${formatEtb(parsed.amountEtb)} ይላል፣ እርስዎ ግን ETB ${formatEtb(requestedEtb)} አስገብተዋል። መጠኑ ከተቀየረ /deposit ብለው እንደገና ይጀምሩ።`,
+        ),
       );
       return;
     }
@@ -732,8 +765,14 @@ async function finishDepositFromTelebirrMessage(
     if (request.status === "APPROVED") {
       await ctx.reply(
         [
-          `Deposit verified: +${request.amount} credits`,
-          `Wallet balance: ${wallet?.balance ?? user.wallet?.balance ?? 0} credits`,
+          bi(
+            `Deposit verified: +${request.amount} credits`,
+            `ማስገቢያው ተረጋግጧል፦ +${request.amount} ክሬዲት`,
+          ),
+          bi(
+            `Wallet balance: ${wallet?.balance ?? user.wallet?.balance ?? 0} credits`,
+            `የWallet ቀሪ ሂሳብ፦ ${wallet?.balance ?? user.wallet?.balance ?? 0} ክሬዲት`,
+          ),
         ].join("\n"),
       );
       return;
@@ -741,7 +780,7 @@ async function finishDepositFromTelebirrMessage(
 
     await ctx.reply(
       [
-        "Deposit received for manual review.",
+        bi("Deposit received for manual review.", "ማስገቢያው ለእጅ ማረጋገጫ ተቀብሏል።"),
         request.validationReason ?? "An admin will review it shortly.",
       ].join("\n"),
       supportKeyboard(),
@@ -752,8 +791,14 @@ async function finishDepositFromTelebirrMessage(
         ? error.message
         : "Could not read that Telebirr message.";
     const retryInstruction = message.toLowerCase().includes("receiver phone")
-      ? `Please send the payment to the exact Telebirr number shown by the bot: ${env.TELEBIRR_DEPOSIT_PHONE}.`
-      : "Please paste the full Telebirr message again, including the receipt link.";
+      ? bi(
+          `Please send the payment to the exact Telebirr number shown by the bot: ${env.TELEBIRR_DEPOSIT_PHONE}.`,
+          `እባክዎ ክፍያውን ቦቱ ለሚያሳየው ትክክለኛ የTelebirr ቁጥር ይላኩ፦ ${env.TELEBIRR_DEPOSIT_PHONE}`,
+        )
+      : bi(
+          "Please paste the full Telebirr message again, including the receipt link.",
+          "እባክዎ የመቀበያ ሊንኩን ጨምሮ የTelebirr መልዕክቱን ሙሉ በሙሉ እንደገና ይለጥፉ።",
+        );
     await ctx.reply([message, retryInstruction].join("\n"));
   }
 }
@@ -773,9 +818,15 @@ async function cancelDepositFlow(ctx: Context): Promise<void> {
 async function replyHelp(ctx: Context): Promise<void> {
   await ctx.reply(
     [
-      "Help",
-      "Use Play to join a room, Deposit to add Telebirr credits, Wallet to check credits, and Invite to share your referral link.",
-      "Bingo claims are validated by the server and every finished match exposes a fair-play proof.",
+      "Help / እገዛ",
+      bi(
+        "Use Play to join a room, Deposit to add Telebirr credits, Wallet to check credits, and Invite to share your referral link.",
+        "Play ክፍል ለመቀላቀል፣ Deposit የTelebirr ክሬዲት ለማስገባት፣ Wallet ቀሪ ሂሳብ ለማየት፣ Invite የግብዣ ሊንክ ለማጋራት ይጠቀሙ።",
+      ),
+      bi(
+        "Bingo claims are validated by the server and every finished match exposes a fair-play proof.",
+        "የBingo ጥያቄዎች በሰርቨር ይረጋገጣሉ፣ የተጠናቀቀ ጨዋታም የፍትሃዊ ጨዋታ ማስረጃ ያሳያል።",
+      ),
       supportContactText(),
     ].join("\n"),
     supportKeyboard(),
@@ -1332,11 +1383,18 @@ function supportContactUrl(): string | undefined {
   return undefined;
 }
 
+function bi(english: string, amharic: string): string {
+  return `${english}\n${amharic}`;
+}
+
 async function askForContact(ctx: Context): Promise<void> {
   await ctx.reply(
-    "Share your Telegram contact first. Deposits must be sent from this same Telebirr phone number.",
+    bi(
+      "Share your Telegram contact first. Deposits must be sent from this same Telebirr phone number.",
+      "መጀመሪያ የTelegram ኮንታክትዎን ያጋሩ። ክፍያዎች ከዚህ የTelebirr ስልክ ቁጥር መላክ አለባቸው።",
+    ),
     Markup.keyboard([
-      [Markup.button.contactRequest("Share my phone number")],
+      [Markup.button.contactRequest("Share phone / ስልክ አጋራ")],
     ]).resize(),
   );
 }
@@ -1344,8 +1402,14 @@ async function askForContact(ctx: Context): Promise<void> {
 async function askForDepositAmount(ctx: Context): Promise<void> {
   await ctx.reply(
     [
-      "Send the Telebirr deposit amount in ETB.",
-      `Credit rate: 1 ETB = ${env.TELEBIRR_CREDIT_PER_ETB} credit(s).`,
+      bi(
+        "Send the Telebirr deposit amount in ETB.",
+        "የTelebirr ማስገቢያ መጠንን በETB ይላኩ።",
+      ),
+      bi(
+        `Credit rate: 1 ETB = ${env.TELEBIRR_CREDIT_PER_ETB} credit(s).`,
+        `የክሬዲት ሬት፦ 1 ETB = ${env.TELEBIRR_CREDIT_PER_ETB} ክሬዲት።`,
+      ),
     ].join("\n"),
     Markup.removeKeyboard(),
   );

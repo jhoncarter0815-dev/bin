@@ -677,6 +677,10 @@ function HomePage({
           Practice
         </button>
       </div>
+      <InstructionNote
+        en="Public Room joins the live queue. Practice lets you test a card without paying entry."
+        am="Public Room የቀጥታ ወረፋ ያስገባዎታል። Practice ያለ መግቢያ ክፍያ ካርድ ለመሞከር ነው።"
+      />
       <div className="home-mini-grid">
         <div className="mini-panel">
           <span>Wallet</span>
@@ -688,6 +692,23 @@ function HomePage({
         </div>
       </div>
     </section>
+  );
+}
+
+function InstructionNote({
+  en,
+  am,
+  compact = false,
+}: {
+  en: string;
+  am: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`instruction-note ${compact ? "compact" : ""}`}>
+      <p>{en}</p>
+      <p lang="am">{am}</p>
+    </div>
   );
 }
 
@@ -721,6 +742,15 @@ function PlayPage({
 }) {
   const occupied = new Map(room.seats.map((seat) => [seat.seatNumber, seat]));
   const pot = room.seats.length * room.entryFee;
+  const instruction = activeSeat
+    ? {
+        en: "Keep this page open. The match starts automatically after the countdown.",
+        am: "ይህን ገጽ ክፍት ያድርጉት። ቆጠራው ካለቀ በኋላ ጨዋታው በራሱ ይጀምራል።",
+      }
+    : {
+        en: "Tap one open seat. Your entry fee is locked only after you choose a seat.",
+        am: "አንድ ክፍት መቀመጫ ይንኩ። የመግቢያ ክፍያዎ መቀመጫ ከመረጡ በኋላ ብቻ ይያዛል።",
+      };
 
   return (
     <section className="stack">
@@ -744,6 +774,7 @@ function PlayPage({
         />
         <Metric label="Pot" value={`${pot}`} tone="gold" />
       </div>
+      <InstructionNote en={instruction.en} am={instruction.am} compact />
       <div className="seat-panel">
         <div className="seat-panel-head">
           <div className="seat-legend">
@@ -813,6 +844,12 @@ function MatchmakingPage({
           Refresh
         </button>
       </div>
+
+      <InstructionNote
+        compact
+        en="Keep this screen open. You can watch the live room while waiting for the next one."
+        am="ይህን ገጽ ክፍት ያድርጉት። ቀጣዩን ክፍል እየጠበቁ የቀጥታ ጨዋታን ማየት ይችላሉ።"
+      />
 
       <div className="compact-stats">
         <Metric label="Queued" value={`${state.queuedCount}`} tone="cyan" />
@@ -1018,9 +1055,21 @@ function GamePage({
       {match.status === "ACTIVE" ? (
         <div className="game-controls">
           <label className="switch-row">
-            <span>
-              <Crown size={17} />
-              Auto Bingo
+            <span className="switch-copy">
+              <span className="switch-title">
+                <Crown size={17} />
+                Auto Bingo
+              </span>
+              <small>
+                {autoBingo
+                  ? "On: wins are checked automatically."
+                  : "Off: mark called numbers, then tap Bingo."}
+              </small>
+              <small lang="am">
+                {autoBingo
+                  ? "በርቷል፦ ድል በራሱ ይፈተሻል።"
+                  : "ጠፍቷል፦ የተጠሩትን ቁጥሮች ምረጥ፣ ከዚያ Bingo ንካ።"}
+              </small>
             </span>
             <input
               type="checkbox"
@@ -1182,6 +1231,19 @@ function WalletPage({
 
         {mode === "deposit" ? (
           <>
+            <InstructionNote
+              compact
+              en={
+                depositStep === "amount"
+                  ? "Enter the ETB amount first. Send payment only to the Telebirr name and number shown below."
+                  : "After paying, paste the full Telebirr SMS. Do not edit the amount, code, date, or receipt link."
+              }
+              am={
+                depositStep === "amount"
+                  ? "መጀመሪያ የETB መጠን ያስገቡ። ክፍያውን ከታች ለታየው የTelebirr ስምና ቁጥር ብቻ ይላኩ።"
+                  : "ከከፈሉ በኋላ የTelebirr SMS ሙሉ በሙሉ ይለጥፉ። መጠን፣ ኮድ፣ ቀን ወይም ሊንክ አይቀይሩ።"
+              }
+            />
             <div className="telebirr-recipient">
               <span>Telebirr</span>
               <strong>{depositInfo?.receiverName ?? "Bingo Core"}</strong>
@@ -1225,6 +1287,11 @@ function WalletPage({
           </>
         ) : (
           <>
+            <InstructionNote
+              compact
+              en="Enter the credits to withdraw and your payout details. Admin approval is required."
+              am="ለማውጣት የሚፈልጉትን ክሬዲትና የመቀበያ መረጃ ያስገቡ። የአድሚን ማረጋገጫ ያስፈልጋል።"
+            />
             <label className="field-label">
               <span>Amount</span>
               <input
