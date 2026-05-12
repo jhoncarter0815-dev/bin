@@ -13,6 +13,7 @@ import {
 import {
   approveWalletRequest,
   rejectWalletRequest,
+  revalidateTelebirrWalletRequest,
 } from "../services/walletRequests.js";
 
 const creditBodySchema = z.object({
@@ -185,6 +186,29 @@ export async function registerAdminRoutes(
       wallet: { balance: result.wallet.balance, locked: result.wallet.locked },
     };
   });
+
+  fastify.post(
+    "/api/admin/wallet-requests/:id/retry-telebirr",
+    async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = walletRequestActionBodySchema.parse(request.body ?? {});
+      const result = await revalidateTelebirrWalletRequest({
+        requestId: params.id,
+        adminNote: body.note,
+      });
+      return {
+        request: toWalletRequestDto(result.request),
+        wallet: result.wallet
+          ? { balance: result.wallet.balance, locked: result.wallet.locked }
+          : null,
+        validation: {
+          autoApprove: result.validation.autoApprove,
+          status: result.validation.status,
+          reason: result.validation.reason,
+        },
+      };
+    },
+  );
 
   fastify.post("/api/admin/wallet-requests/:id/reject", async (request) => {
     const params = z.object({ id: z.string() }).parse(request.params);

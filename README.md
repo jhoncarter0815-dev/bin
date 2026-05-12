@@ -76,6 +76,15 @@ The included Dockerfile builds shared code, the API, and the Mini App. `docker-c
 4. Expose port `8080`.
 5. Point BotFather Mini App URL to `PUBLIC_APP_URL`.
 
+If Telebirr receipts validate locally but fail from Railway with `fetch failed`
+or timeouts, the receipt site may be blocking Railway/cloud egress. Set
+`TELEBIRR_RECEIPT_PROXY_URL` to a trusted small validator/proxy that can reach
+`transactioninfo.ethiotelecom.et`; the API will use it first and still run the
+same receipt, amount, receiver, phone, duplicate-code, and sender-phone checks.
+The proxy should accept `POST {"url":"https://transactioninfo.ethiotelecom.et/receipt/CODE"}`
+and return either raw receipt HTML or JSON like `{"html":"<html>..."}`. Protect it
+with `TELEBIRR_RECEIPT_PROXY_SECRET` when possible.
+
 ## Admin
 
 Admin endpoints require the `x-admin-secret` header matching `ADMIN_SECRET`.

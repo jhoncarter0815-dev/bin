@@ -331,11 +331,22 @@ async function fetchReceiptHtml(
 }
 
 async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
+  let proxyError: Error | null = null;
+  if (env.TELEBIRR_RECEIPT_PROXY_URL.trim()) {
+    try {
+      return await fetchReceiptHtmlWithProxy(url);
+    } catch (error) {
+      proxyError = normalizeProxyFetchError(error);
+    }
+  }
+
   try {
     return await fetchReceiptHtmlWithFetch(url);
   } catch (error) {
     if (isAbortError(error)) {
-      throw new Error("Telebirr receipt validation timed out");
+      const directError = new Error("Telebirr receipt validation timed out");
+      if (proxyError) throw proxyError;
+      throw directError;
     }
     if (!isTransientReceiptFetchError(error)) {
       throw normalizeReceiptFetchError(error);
@@ -346,9 +357,77 @@ async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
     return await fetchReceiptHtmlWithHttps(url);
   } catch (error) {
     if (isAbortError(error)) {
-      throw new Error("Telebirr receipt validation timed out");
+      const directError = new Error("Telebirr receipt validation timed out");
+      if (proxyError) throw proxyError;
+      throw directError;
     }
+    if (proxyError) throw proxyError;
     throw normalizeReceiptFetchError(error);
+  }
+}
+
+async function fetchReceiptHtmlWithProxy(url: URL): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    env.TELEBIRR_RECEIPT_TIMEOUT_MS,
+  );
+
+  try {
+    const headers: Record<string, string> = {
+      accept: "application/json,text/html,text/plain;q=0.9,*/*;q=0.8",
+      "content-type": "application/json",
+    };
+    if (env.TELEBIRR_RECEIPT_PROXY_SECRET.trim()) {
+      headers["x-telebirr-proxy-secret"] =
+        env.TELEBIRR_RECEIPT_PROXY_SECRET.trim();
+    }
+
+    const response = await fetch(env.TELEBIRR_RECEIPT_PROXY_URL, {
+      method: "POST",
+      redirect: "manual",
+      signal: controller.signal,
+      headers,
+      body: JSON.stringify({ url: url.toString() }),
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error("proxy redirected unexpectedly");
+    }
+    if (!response.ok) {
+      throw new Error(`proxy returned HTTP ${response.status}`);
+    }
+
+    const length = Number(response.headers.get("content-length") ?? 0);
+    if (length > MAX_RECEIPT_BYTES) {
+      throw new Error("proxy response is too large");
+    }
+
+    const body = await response.text();
+    if (Buffer.byteLength(body, "utf8") > MAX_RECEIPT_BYTES) {
+      throw new Error("proxy response is too large");
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("application/json")) return body;
+
+    const parsed = JSON.parse(body) as {
+      html?: unknown;
+      receiptHtml?: unknown;
+    };
+    const html =
+      typeof parsed.html === "string"
+        ? parsed.html
+        : typeof parsed.receiptHtml === "string"
+          ? parsed.receiptHtml
+          : "";
+    if (!html) throw new Error("proxy response did not include receipt HTML");
+    if (Buffer.byteLength(html, "utf8") > MAX_RECEIPT_BYTES) {
+      throw new Error("proxy receipt HTML is too large");
+    }
+    return html;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -456,6 +535,18 @@ function normalizeReceiptFetchError(error: unknown): Error {
     return new Error(`Could not validate Telebirr receipt: ${error.message}`);
   }
   return new Error("Could not validate Telebirr receipt");
+}
+
+function normalizeProxyFetchError(error: unknown): Error {
+  if (isAbortError(error)) {
+    return new Error("Telebirr receipt proxy validation timed out");
+  }
+  if (error instanceof Error) {
+    return new Error(
+      `Could not validate Telebirr receipt through proxy: ${error.message}`,
+    );
+  }
+  return new Error("Could not validate Telebirr receipt through proxy");
 }
 
 function htmlToText(html: string): string {

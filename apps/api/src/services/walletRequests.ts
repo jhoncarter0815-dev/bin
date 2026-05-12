@@ -228,9 +228,11 @@ export function listWalletRequests(userId: string) {
 function findDuplicateTelebirrRequest(
   transactionCode: string,
   receiptUrl: string,
+  excludeRequestId?: string,
 ) {
   return prisma.walletRequest.findFirst({
     where: {
+      ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
       OR: [
         {
           transactionCode: {
@@ -245,6 +247,150 @@ function findDuplicateTelebirrRequest(
       ],
     },
     select: { id: true },
+  });
+}
+
+export async function revalidateTelebirrWalletRequest(input: {
+  requestId: string;
+  adminId?: string | null;
+  adminNote?: string | null;
+}) {
+  const request = await prisma.walletRequest.findUnique({
+    where: { id: input.requestId },
+    include: { user: { select: { phoneNumber: true } } },
+  });
+  if (!request) throw new NotFoundError("Wallet request not found");
+  if (request.status !== "PENDING")
+    throw new ConflictError("Wallet request is already resolved");
+  if (request.type !== "DEPOSIT" || request.provider !== "TELEBIRR") {
+    throw new ConflictError("Only pending Telebirr deposits can be retried");
+  }
+
+  const transactionCode = normalizeTelebirrTransactionCode(
+    requiredText(
+      request.transactionCode,
+      "Telebirr transaction code is missing",
+    ),
+  );
+  const transactionTime = requiredText(
+    request.transactionTime,
+    "Telebirr transaction time is missing",
+  );
+  const receiptUrl = normalizeTelebirrReceiptUrl(
+    requiredText(request.receiptUrl, "Telebirr receipt URL is missing"),
+  ).toString();
+
+  const validation = await validateTelebirrDeposit({
+    amount: request.amount,
+    transactionCode,
+    transactionTime,
+    receiptUrl,
+    senderPhoneNumber: request.user.phoneNumber,
+  });
+  const normalizedTransactionCode =
+    validation.transactionCode ?? transactionCode;
+  const normalizedReceiptUrl = validation.receiptUrl ?? receiptUrl;
+
+  const duplicate = await findDuplicateTelebirrRequest(
+    normalizedTransactionCode,
+    normalizedReceiptUrl,
+    request.id,
+  );
+  if (duplicate) {
+    throw new ConflictError(
+      "This Telebirr transaction code or receipt URL was already submitted",
+    );
+  }
+
+  if (!validation.autoApprove) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.walletRequest.update({
+        where: { id: request.id },
+        data: {
+          transactionCode: normalizedTransactionCode,
+          receiptUrl: normalizedReceiptUrl,
+          validationStatus: validation.status,
+          validationReason: validation.reason,
+          validationPayload: validation.payload as Prisma.InputJsonValue,
+          adminId: input.adminId ?? request.adminId,
+          adminNote: cleanText(input.adminNote) ?? request.adminNote,
+        },
+      });
+
+      await logAudit(tx, {
+        actorId: input.adminId ?? undefined,
+        action: "TELEBIRR_DEPOSIT_REVALIDATED_NEEDS_REVIEW",
+        target: walletRequestTarget(request.id),
+        metadata: {
+          userId: request.userId,
+          amount: request.amount,
+          transactionCode: normalizedTransactionCode,
+          validationStatus: validation.status,
+          validationReason: validation.reason,
+        },
+      });
+
+      return { request: updated, wallet: null, validation };
+    });
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.walletRequest.updateMany({
+      where: { id: request.id, status: "PENDING" },
+      data: {
+        status: "APPROVED",
+        transactionCode: normalizedTransactionCode,
+        receiptUrl: normalizedReceiptUrl,
+        validationStatus: validation.status,
+        validationReason: validation.reason,
+        validationPayload: validation.payload as Prisma.InputJsonValue,
+        adminId: input.adminId ?? null,
+        adminNote: cleanText(input.adminNote),
+        resolvedAt: new Date(),
+      },
+    });
+
+    if (claimed.count !== 1)
+      throw new ConflictError("Wallet request is already resolved");
+
+    const wallet = await creditWallet(tx, {
+      userId: request.userId,
+      amount: request.amount,
+      type: "DEPOSIT",
+      description: "Telebirr deposit auto-approved after retry",
+      metadata: {
+        walletRequestId: request.id,
+        provider: "TELEBIRR",
+        transactionCode: normalizedTransactionCode,
+        receiptUrl: normalizedReceiptUrl,
+        adminId: input.adminId ?? null,
+        adminNote: cleanText(input.adminNote),
+        retry: true,
+        senderPhoneLast4: normalizeTelebirrPhone(
+          request.user.phoneNumber ?? "",
+        ).slice(-4),
+      } as Prisma.InputJsonValue,
+    });
+
+    const updated = await tx.walletRequest.findUniqueOrThrow({
+      where: { id: request.id },
+    });
+
+    await logAudit(tx, {
+      actorId: input.adminId ?? undefined,
+      action: "TELEBIRR_DEPOSIT_REVALIDATED_APPROVED",
+      target: walletRequestTarget(request.id),
+      metadata: {
+        userId: request.userId,
+        amount: request.amount,
+        transactionCode: normalizedTransactionCode,
+        validationStatus: validation.status,
+        validationReason: validation.reason,
+        balanceAfter: wallet.balance,
+      },
+    });
+
+    return { request: updated, wallet, validation };
   });
 }
 

@@ -39,6 +39,17 @@ const schema = z.object({
     .int()
     .positive()
     .default(45000),
+  TELEBIRR_RECEIPT_PROXY_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
+  TELEBIRR_RECEIPT_PROXY_SECRET: z
+    .string()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
   TELEBIRR_MAX_RECEIPT_AGE_HOURS: z.coerce
     .number()
     .int()

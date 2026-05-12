@@ -21,6 +21,7 @@ import {
   createWalletRequest,
   listPendingWalletRequests,
   rejectWalletRequest,
+  revalidateTelebirrWalletRequest,
 } from "./services/walletRequests.js";
 import {
   moneyEquals,
@@ -132,6 +133,16 @@ bot.command("approve_wallet", async (ctx) => {
 bot.command("reject_wallet", async (ctx) => {
   if (!(await requireAdminMessage(ctx))) return;
   await resolveWalletRequestCommand(ctx, "reject");
+});
+
+bot.command("retry_wallet", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await retryWalletRequestCommand(ctx);
+});
+
+bot.command("retry_deposit", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await retryWalletRequestCommand(ctx);
 });
 
 bot.command("ban", async (ctx) => {
@@ -358,6 +369,12 @@ bot.action(/^admin:wallet_reject:(.+)$/, async (ctx) => {
   if (!(await requireAdminCallback(ctx))) return;
   await ctx.answerCbQuery();
   await resolveWalletRequestCallback(ctx, "reject", ctx.match[1] ?? "");
+});
+
+bot.action(/^admin:wallet_retry:(.+)$/, async (ctx) => {
+  if (!(await requireAdminCallback(ctx))) return;
+  await ctx.answerCbQuery();
+  await retryWalletRequestCallback(ctx, ctx.match[1] ?? "");
 });
 
 bot.action("admin:force_room", async (ctx) => {
@@ -884,6 +901,7 @@ async function replyAdminHelp(ctx: Context): Promise<void> {
       "/clear_free_credits USER reason - remove available credits not backed by deposits",
       "/approve_wallet REQUEST_ID note - approve deposit/withdraw request",
       "/reject_wallet REQUEST_ID note - reject deposit/withdraw request",
+      "/retry_wallet REQUEST_ID note - retry Telebirr receipt auto-validation",
       "/ban USER reason - ban user",
       "/unban USER - unban user",
       "/broadcast message - send message to all unbanned users",
@@ -936,6 +954,7 @@ async function replyAdminSettings(ctx: Context): Promise<void> {
       `TELEBIRR_AUTO_DEPOSIT_ENABLED=${env.TELEBIRR_AUTO_DEPOSIT_ENABLED}`,
       `TELEBIRR_RECEIPT_ALLOWED_HOSTS=${env.TELEBIRR_RECEIPT_ALLOWED_HOSTS.join(",")}`,
       `TELEBIRR_RECEIPT_TIMEOUT_MS=${env.TELEBIRR_RECEIPT_TIMEOUT_MS}`,
+      `TELEBIRR_RECEIPT_PROXY_URL=${env.TELEBIRR_RECEIPT_PROXY_URL ? "configured" : "missing"}`,
       `TELEBIRR_DEPOSIT_RECEIVER=${env.TELEBIRR_DEPOSIT_RECEIVER ? "configured" : "missing"}`,
       `TELEBIRR_DEPOSIT_PHONE=${env.TELEBIRR_DEPOSIT_PHONE ? "configured" : "missing"}`,
       "",
@@ -976,7 +995,7 @@ async function replyPendingWalletRequests(ctx: Context): Promise<void> {
           "Pending wallet requests",
           ...requests.map(formatWalletRequestLine),
           "",
-          "Use /approve_wallet REQUEST_ID note or /reject_wallet REQUEST_ID note.",
+          "Use /retry_wallet REQUEST_ID note, /approve_wallet REQUEST_ID note, or /reject_wallet REQUEST_ID note.",
         ].join("\n")
       : "No pending wallet requests.",
     walletRequestsKeyboard(requests),
@@ -1019,6 +1038,73 @@ async function resolveWalletRequestCallback(
   } catch (error) {
     await ctx.reply(adminError(error), adminMenuKeyboard());
   }
+}
+
+async function retryWalletRequestCommand(ctx: Context): Promise<void> {
+  const [target, ...noteParts] = commandArgs(ctx);
+  if (!target) {
+    await ctx.reply(
+      "Usage: /retry_wallet REQUEST_ID note",
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  try {
+    const requestId = await resolveWalletRequestId(target);
+    await retryWalletRequest(
+      ctx,
+      requestId,
+      noteParts.join(" ") || "Retried from admin command",
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function retryWalletRequestCallback(
+  ctx: Context,
+  requestId: string,
+): Promise<void> {
+  try {
+    await retryWalletRequest(ctx, requestId, "Retried from admin menu");
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function retryWalletRequest(
+  ctx: Context,
+  requestId: string,
+  note: string,
+): Promise<void> {
+  const adminId = await adminActorId(ctx);
+  const result = await revalidateTelebirrWalletRequest({
+    requestId,
+    adminId,
+    adminNote: note.trim() || undefined,
+  });
+  const request = await prisma.walletRequest.findUniqueOrThrow({
+    where: { id: result.request.id },
+    include: { user: { include: { wallet: true } } },
+  });
+
+  if (request.status === "APPROVED") {
+    await notifyWalletRequestUser(request.id);
+    await ctx.reply(
+      `Telebirr retry approved ${shortRequestId(request.id)} for ${displayUser(request.user)}.\nAmount: ${request.amount} credits\nBalance: ${result.wallet?.balance ?? request.user.wallet?.balance ?? 0}`,
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  await ctx.reply(
+    [
+      `Telebirr retry still needs review for ${shortRequestId(request.id)}.`,
+      result.validation.reason,
+    ].join("\n"),
+    adminMenuKeyboard(),
+  );
 }
 
 async function resolveWalletRequest(
@@ -1380,9 +1466,18 @@ function adminMenuKeyboard() {
 }
 
 function walletRequestsKeyboard(requests: PendingWalletRequest[]) {
-  const rows = requests
-    .slice(0, 8)
-    .map((request) => [
+  const rows = requests.slice(0, 8).map((request) => {
+    const retry =
+      request.type === "DEPOSIT" && request.provider === "TELEBIRR"
+        ? [
+            Markup.button.callback(
+              `Retry ${shortRequestId(request.id)}`,
+              `admin:wallet_retry:${request.id}`,
+            ),
+          ]
+        : [];
+    return [
+      ...retry,
       Markup.button.callback(
         `Approve ${shortRequestId(request.id)}`,
         `admin:wallet_approve:${request.id}`,
@@ -1391,7 +1486,8 @@ function walletRequestsKeyboard(requests: PendingWalletRequest[]) {
         `Reject ${shortRequestId(request.id)}`,
         `admin:wallet_reject:${request.id}`,
       ),
-    ]);
+    ];
+  });
   rows.push([Markup.button.callback("Back", "admin:menu")]);
   return Markup.inlineKeyboard(rows);
 }

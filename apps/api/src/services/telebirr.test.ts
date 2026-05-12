@@ -15,6 +15,7 @@ const { parseTelebirrMessage, validateTelebirrDeposit } =
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("parseTelebirrMessage", () => {
@@ -145,5 +146,72 @@ describe("validateTelebirrDeposit", () => {
       transactionCode: "DEB7SU3907",
       receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DEB7SU3907",
     });
+  });
+
+  it("uses a configured receipt proxy before direct Telebirr fetches", async () => {
+    vi.resetModules();
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/bingo");
+    vi.stubEnv("JWT_SECRET", "test-jwt-secret-with-enough-length");
+    vi.stubEnv("ADMIN_SECRET", "test-admin-secret");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123456:test-token");
+    vi.stubEnv(
+      "TELEBIRR_RECEIPT_ALLOWED_HOSTS",
+      "transactioninfo.ethiotelecom.et",
+    );
+    vi.stubEnv("TELEBIRR_DEPOSIT_RECEIVER", "KALEAB GIRMA");
+    vi.stubEnv("TELEBIRR_DEPOSIT_PHONE", "251931922096");
+    vi.stubEnv("TELEBIRR_MAX_RECEIPT_AGE_HOURS", "0");
+    vi.stubEnv("TELEBIRR_RECEIPT_PROXY_URL", "https://proxy.example/receipt");
+    vi.stubEnv("TELEBIRR_RECEIPT_PROXY_SECRET", "proxy-secret");
+
+    const fetchMock = vi.fn(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        expect(String(input)).toBe("https://proxy.example/receipt");
+        expect(init?.method).toBe("POST");
+        expect(
+          (init?.headers as Record<string, string>)["x-telebirr-proxy-secret"],
+        ).toBe("proxy-secret");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          url: "https://transactioninfo.ethiotelecom.et/receipt/DEC0TWSCWM",
+        });
+
+        return new Response(
+          JSON.stringify({
+            html: [
+              "<html><body>",
+              "Payer Name Adonias Demeke Gebeyehu",
+              "Payer telebirr no. 2519****3777",
+              "Credited Party name KALEAB GIRMA MENGISTU",
+              "Credited party account no 2519****2096",
+              "transaction status Completed",
+              "Settled Amount DEC0TWSCWM 12/05/2026 13:38:09 5.00 Birr",
+              "</body></html>",
+            ].join(" "),
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { validateTelebirrDeposit: validateWithProxy } =
+      await import("./telebirr.js");
+    const result = await validateWithProxy({
+      amount: 5,
+      transactionCode: "DEC0TWSCWM",
+      transactionTime: "12/05/2026 13:38:09",
+      receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DEC0TWSCWM",
+      senderPhoneNumber: "251900003777",
+    });
+
+    expect(result).toMatchObject({
+      autoApprove: true,
+      status: "VERIFIED",
+      transactionCode: "DEC0TWSCWM",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
