@@ -34,7 +34,11 @@ const schema = z.object({
   TELEBIRR_RECEIPT_ALLOWED_HOSTS: z
     .string()
     .default("transactioninfo.ethiotelecom.et"),
-  TELEBIRR_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  TELEBIRR_RECEIPT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(20000),
   TELEBIRR_MAX_RECEIPT_AGE_HOURS: z.coerce
     .number()
     .int()

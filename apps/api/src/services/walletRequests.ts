@@ -15,6 +15,8 @@ import {
   normalizeTelebirrPhone,
   normalizeTelebirrTransactionCode,
   parseTelebirrMessage,
+  telebirrReceiptUrlCandidates,
+  telebirrTransactionCodeCandidates,
   type TelebirrParsedMessage,
   validateTelebirrDeposit,
 } from "./telebirr.js";
@@ -85,7 +87,7 @@ async function createTelebirrDepositRequest(input: {
   const parsedMessage = input.telebirrMessage
     ? parseTelebirrMessage(input.telebirrMessage)
     : null;
-  const transactionCode = normalizeTelebirrTransactionCode(
+  let transactionCode = normalizeTelebirrTransactionCode(
     requiredText(
       input.transactionCode ?? parsedMessage?.transactionCode,
       "Telebirr transaction code is required",
@@ -95,7 +97,7 @@ async function createTelebirrDepositRequest(input: {
     input.transactionTime ?? parsedMessage?.transactionTime,
     "Telebirr transaction time is required",
   ).slice(0, 120);
-  const receiptUrl = normalizeTelebirrReceiptUrl(
+  let receiptUrl = normalizeTelebirrReceiptUrl(
     requiredText(
       input.receiptUrl ?? parsedMessage?.receiptUrl,
       "Telebirr receipt URL is required",
@@ -112,12 +114,10 @@ async function createTelebirrDepositRequest(input: {
     });
   }
 
-  const duplicate = await prisma.walletRequest.findFirst({
-    where: {
-      OR: [{ transactionCode }, { receiptUrl }],
-    },
-    select: { id: true },
-  });
+  const duplicate = await findDuplicateTelebirrRequest(
+    transactionCode,
+    receiptUrl,
+  );
   if (duplicate) {
     throw new ConflictError(
       "This Telebirr transaction code or receipt URL was already submitted",
@@ -132,6 +132,18 @@ async function createTelebirrDepositRequest(input: {
     senderPhoneNumber: input.senderPhoneNumber,
     parsedMessage,
   });
+  transactionCode = validation.transactionCode ?? transactionCode;
+  receiptUrl = validation.receiptUrl ?? receiptUrl;
+
+  const normalizedDuplicate = await findDuplicateTelebirrRequest(
+    transactionCode,
+    receiptUrl,
+  );
+  if (normalizedDuplicate) {
+    throw new ConflictError(
+      "This Telebirr transaction code or receipt URL was already submitted",
+    );
+  }
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -210,6 +222,29 @@ export function listWalletRequests(userId: string) {
     where: { userId },
     orderBy: { createdAt: "desc" },
     take: WALLET_REQUEST_PAGE_SIZE,
+  });
+}
+
+function findDuplicateTelebirrRequest(
+  transactionCode: string,
+  receiptUrl: string,
+) {
+  return prisma.walletRequest.findFirst({
+    where: {
+      OR: [
+        {
+          transactionCode: {
+            in: telebirrTransactionCodeCandidates(transactionCode),
+          },
+        },
+        {
+          receiptUrl: {
+            in: telebirrReceiptUrlCandidates(receiptUrl, transactionCode),
+          },
+        },
+      ],
+    },
+    select: { id: true },
   });
 }
 
@@ -435,12 +470,14 @@ function assertParsedMessageMatchesDeposit(input: {
   expectedEtb: number;
 }): void {
   const { parsedMessage, transactionCode, receiptUrl, expectedEtb } = input;
-  if (parsedMessage.transactionCode !== transactionCode) {
+  if (
+    !telebirrCodesEquivalent(parsedMessage.transactionCode, transactionCode)
+  ) {
     throw new AppError("Telebirr message transaction code does not match");
   }
 
   const urlCode = receiptUrlCode(receiptUrl);
-  if (urlCode && urlCode !== transactionCode) {
+  if (urlCode && !telebirrCodesEquivalent(urlCode, transactionCode)) {
     throw new AppError("Telebirr receipt URL does not match transaction code");
   }
 
@@ -480,6 +517,13 @@ function receiptUrlCode(receiptUrl: string): string | null {
 
 function compactText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function telebirrCodesEquivalent(left: string, right: string): boolean {
+  const rightCandidates = new Set(telebirrTransactionCodeCandidates(right));
+  return telebirrTransactionCodeCandidates(left).some((candidate) =>
+    rightCandidates.has(candidate),
+  );
 }
 
 function walletRequestTarget(requestId: string): string {

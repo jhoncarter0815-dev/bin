@@ -8,6 +8,7 @@ process.env.TELEBIRR_RECEIPT_ALLOWED_HOSTS ??=
   "transactioninfo.ethiotelecom.et";
 process.env.TELEBIRR_DEPOSIT_RECEIVER ??= "core bingo";
 process.env.TELEBIRR_DEPOSIT_PHONE ??= "251900000000";
+process.env.TELEBIRR_MAX_RECEIPT_AGE_HOURS ??= "0";
 
 const { parseTelebirrMessage, validateTelebirrDeposit } =
   await import("./telebirr.js");
@@ -90,6 +91,59 @@ describe("validateTelebirrDeposit", () => {
       autoApprove: false,
       status: "MANUAL_REVIEW",
       reason: "Telebirr receipt validation timed out",
+    });
+  });
+
+  it("tries a digit-zero receipt URL when the pasted code uses letter O", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL | RequestInfo) => {
+        const url = String(input);
+        if (url.includes("DEB7SU39O7")) {
+          return new Response(
+            "<html><body>This request is not correct</body></html>",
+            { status: 200 },
+          );
+        }
+        return new Response(
+          [
+            "<html><body>",
+            "Payer Name Test User",
+            "Payer telebirr no. 2519****1111",
+            "Credited Party name core bingo",
+            "Credited party account no 2519****0000",
+            "transaction status Completed",
+            "Settled Amount DEB7SU3907 09-05-2026 14:07:49 1,000.00 Birr",
+            "</body></html>",
+          ].join(" "),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await validateTelebirrDeposit({
+      amount: 1000,
+      transactionCode: "DEB7SU39O7",
+      transactionTime: "09/05/2026 14:07:49",
+      receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DEB7SU39O7",
+      senderPhoneNumber: "251911111111",
+      parsedMessage: {
+        senderName: "Test User",
+        amountEtb: 1000,
+        receiverName: "core bingo",
+        receiverPhone: "2519****0000",
+        transactionTime: "09/05/2026 14:07:49",
+        transactionCode: "DEB7SU39O7",
+        receiptUrl:
+          "https://transactioninfo.ethiotelecom.et/receipt/DEB7SU39O7",
+      },
+    });
+
+    expect(result).toMatchObject({
+      autoApprove: true,
+      status: "VERIFIED",
+      transactionCode: "DEB7SU3907",
+      receiptUrl: "https://transactioninfo.ethiotelecom.et/receipt/DEB7SU3907",
     });
   });
 });

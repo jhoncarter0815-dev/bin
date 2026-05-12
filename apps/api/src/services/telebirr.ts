@@ -16,6 +16,8 @@ export type TelebirrValidationResult = {
   autoApprove: boolean;
   status: "VERIFIED" | "MANUAL_REVIEW";
   reason: string;
+  transactionCode?: string;
+  receiptUrl?: string;
   payload: Record<string, unknown>;
 };
 
@@ -30,14 +32,29 @@ export type TelebirrParsedMessage = {
 };
 
 const MAX_RECEIPT_BYTES = 1_000_000;
+const RECEIPT_FETCH_ATTEMPTS = 2;
+
+type ReceiptFetchResult = {
+  html: string;
+  url: URL;
+  transactionCode: string;
+  attempts: Array<{
+    url: string;
+    status: "FETCHED" | "REJECTED" | "FAILED";
+    reason?: string;
+  }>;
+};
 
 export async function validateTelebirrDeposit(
   input: TelebirrDepositInput,
 ): Promise<TelebirrValidationResult> {
-  const url = normalizeTelebirrReceiptUrl(input.receiptUrl);
+  const requestedUrl = normalizeTelebirrReceiptUrl(input.receiptUrl);
   const receiver = env.TELEBIRR_DEPOSIT_RECEIVER.trim();
   const receiverPhone = normalizeTelebirrPhone(env.TELEBIRR_DEPOSIT_PHONE);
   const senderPhone = normalizeTelebirrPhone(input.senderPhoneNumber ?? "");
+  const submittedTransactionCode = normalizeTelebirrTransactionCode(
+    input.transactionCode,
+  );
   const parsedMessage =
     input.parsedMessage ??
     (input.telebirrMessage
@@ -45,29 +62,33 @@ export async function validateTelebirrDeposit(
       : null);
 
   if (!env.TELEBIRR_AUTO_DEPOSIT_ENABLED) {
-    return manualReview("Telebirr auto deposit is disabled", url);
+    return manualReview("Telebirr auto deposit is disabled", requestedUrl);
   }
   if (!receiver) {
-    return manualReview("Telebirr receiver is not configured", url);
+    return manualReview("Telebirr receiver is not configured", requestedUrl);
   }
 
-  let html: string;
+  let receipt: ReceiptFetchResult;
   try {
-    html = await fetchReceiptHtml(url);
+    receipt = await fetchReceiptHtml(requestedUrl, submittedTransactionCode);
   } catch (error) {
     return manualReview(
       error instanceof Error ? error.message : "Could not validate receipt",
-      url,
+      requestedUrl,
     );
   }
+  const { html } = receipt;
+  const url = receipt.url;
   const receiptText = htmlToText(html);
   const receiptCompact = compactAlphaNumeric(receiptText);
-  const transactionCode = normalizeTelebirrTransactionCode(
-    input.transactionCode,
-  );
+  const transactionCode = receipt.transactionCode;
   const expectedEtb = input.amount / env.TELEBIRR_CREDIT_PER_ETB;
   const parsedAmounts = parseMoneyValues(receiptText);
   const checks = {
+    submittedCodeMatched: codesEquivalent(
+      submittedTransactionCode,
+      transactionCode,
+    ),
     codeMatched: receiptCompact.includes(compactAlphaNumeric(transactionCode)),
     timeMatched: timeMatches(input.transactionTime, receiptText),
     receiverMatched: receiptCompact.includes(compactAlphaNumeric(receiver)),
@@ -96,9 +117,13 @@ export async function validateTelebirrDeposit(
     provider: "TELEBIRR",
     receiptHost: url.hostname,
     transactionCode,
+    submittedTransactionCode,
     expectedEtb,
     parsedAmounts,
     checks,
+    receiptUrl: url.toString(),
+    submittedReceiptUrl: requestedUrl.toString(),
+    fetchAttempts: receipt.attempts,
     contactPhoneLast4: senderPhone ? senderPhone.slice(-4) : null,
     receiverPhoneLast4: receiverPhone ? receiverPhone.slice(-4) : null,
     message: parsedMessage
@@ -124,6 +149,8 @@ export async function validateTelebirrDeposit(
       autoApprove: false,
       status: "MANUAL_REVIEW",
       reason: `Telebirr validation needs review: ${failed.join(", ")}`,
+      transactionCode,
+      receiptUrl: url.toString(),
       payload,
     };
   }
@@ -132,6 +159,8 @@ export async function validateTelebirrDeposit(
     autoApprove: true,
     status: "VERIFIED",
     reason: "Telebirr receipt verified",
+    transactionCode,
+    receiptUrl: url.toString(),
     payload,
   };
 }
@@ -195,6 +224,32 @@ export function normalizeTelebirrTransactionCode(value: string): string {
   return normalized;
 }
 
+export function telebirrTransactionCodeCandidates(value: string): string[] {
+  const normalized = normalizeTelebirrTransactionCode(value);
+  return uniqueStrings([normalized, normalized.replace(/O/g, "0")]);
+}
+
+export function telebirrReceiptUrlCandidates(
+  value: string,
+  transactionCode?: string | null,
+): string[] {
+  const url = normalizeTelebirrReceiptUrl(value);
+  const candidates = new Map<string, URL>([[url.toString(), url]]);
+  const codes = [
+    receiptCodeFromUrl(url.toString()),
+    transactionCode ? normalizeTelebirrTransactionCode(transactionCode) : null,
+  ].filter((code): code is string => Boolean(code));
+
+  for (const code of codes) {
+    for (const candidateCode of telebirrTransactionCodeCandidates(code)) {
+      const candidateUrl = replaceReceiptCode(url, candidateCode);
+      candidates.set(candidateUrl.toString(), candidateUrl);
+    }
+  }
+
+  return [...candidates.values()].map((candidate) => candidate.toString());
+}
+
 export function normalizeTelebirrPhone(value: string): string {
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
@@ -225,7 +280,56 @@ export function normalizeTelebirrReceiptUrl(value: string): URL {
   return url;
 }
 
-async function fetchReceiptHtml(url: URL): Promise<string> {
+async function fetchReceiptHtml(
+  requestedUrl: URL,
+  transactionCode: string,
+): Promise<ReceiptFetchResult> {
+  const attempts: ReceiptFetchResult["attempts"] = [];
+  let lastError: Error | null = null;
+
+  for (const candidate of telebirrReceiptUrlCandidates(
+    requestedUrl.toString(),
+    transactionCode,
+  )) {
+    const candidateUrl = normalizeTelebirrReceiptUrl(candidate);
+    for (let attempt = 1; attempt <= RECEIPT_FETCH_ATTEMPTS; attempt += 1) {
+      try {
+        const html = await fetchReceiptHtmlOnce(candidateUrl);
+        if (isRejectedReceiptHtml(html)) {
+          attempts.push({
+            url: candidateUrl.toString(),
+            status: "REJECTED",
+            reason: "Telebirr rejected this receipt code",
+          });
+          lastError = new Error("Telebirr receipt code was rejected");
+          break;
+        }
+        attempts.push({ url: candidateUrl.toString(), status: "FETCHED" });
+        return {
+          html,
+          url: candidateUrl,
+          transactionCode:
+            receiptCodeFromUrl(candidateUrl.toString()) ?? transactionCode,
+          attempts,
+        };
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : "Could not validate receipt";
+        attempts.push({
+          url: candidateUrl.toString(),
+          status: "FAILED",
+          reason,
+        });
+        lastError = error instanceof Error ? error : new Error(reason);
+        if (!isTransientReceiptFetchError(error)) break;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Could not validate Telebirr receipt");
+}
+
+async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -281,6 +385,10 @@ function htmlToText(html: string): string {
       .replace(/\s+/g, " ")
       .trim(),
   );
+}
+
+function isRejectedReceiptHtml(html: string): boolean {
+  return htmlToText(html).toLowerCase().includes("this request is not correct");
 }
 
 function decodeEntities(value: string): string {
@@ -414,6 +522,16 @@ function receiptCodeFromUrl(value: string): string | null {
   }
 }
 
+function replaceReceiptCode(url: URL, code: string): URL {
+  const next = new URL(url.toString());
+  const parts = next.pathname.split("/");
+  const lastIndex = parts.length - 1;
+  if (lastIndex < 0) return next;
+  parts[lastIndex] = code;
+  next.pathname = parts.join("/");
+  return next;
+}
+
 function manualReview(reason: string, url?: URL): TelebirrValidationResult {
   return {
     autoApprove: false,
@@ -433,6 +551,28 @@ function isAbortError(error: unknown): boolean {
     (error.name === "AbortError" ||
       error.message.toLowerCase().includes("aborted"))
   );
+}
+
+function isTransientReceiptFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    isAbortError(error) ||
+    message.includes("fetch failed") ||
+    message.includes("network") ||
+    message.includes("timeout") ||
+    message.includes("timed out")
+  );
+}
+
+function codesEquivalent(left: string, right: string): boolean {
+  const leftCandidates = telebirrTransactionCodeCandidates(left);
+  const rightCandidates = new Set(telebirrTransactionCodeCandidates(right));
+  return leftCandidates.some((candidate) => rightCandidates.has(candidate));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function compactAlphaNumeric(value: string): string {
