@@ -38,7 +38,7 @@ const schema = z.object({
     .number()
     .int()
     .positive()
-    .default(20000),
+    .default(45000),
   TELEBIRR_MAX_RECEIPT_AGE_HOURS: z.coerce
     .number()
     .int()

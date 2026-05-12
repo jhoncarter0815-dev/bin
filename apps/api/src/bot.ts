@@ -935,6 +935,7 @@ async function replyAdminSettings(ctx: Context): Promise<void> {
       `DRAW_INTERVAL_MS=${env.DRAW_INTERVAL_MS}`,
       `TELEBIRR_AUTO_DEPOSIT_ENABLED=${env.TELEBIRR_AUTO_DEPOSIT_ENABLED}`,
       `TELEBIRR_RECEIPT_ALLOWED_HOSTS=${env.TELEBIRR_RECEIPT_ALLOWED_HOSTS.join(",")}`,
+      `TELEBIRR_RECEIPT_TIMEOUT_MS=${env.TELEBIRR_RECEIPT_TIMEOUT_MS}`,
       `TELEBIRR_DEPOSIT_RECEIVER=${env.TELEBIRR_DEPOSIT_RECEIVER ? "configured" : "missing"}`,
       `TELEBIRR_DEPOSIT_PHONE=${env.TELEBIRR_DEPOSIT_PHONE ? "configured" : "missing"}`,
       "",

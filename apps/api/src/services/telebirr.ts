@@ -1,4 +1,5 @@
 ﻿import crypto from "node:crypto";
+import https from "node:https";
 import { env } from "../config.js";
 import { AppError } from "../errors.js";
 
@@ -32,7 +33,7 @@ export type TelebirrParsedMessage = {
 };
 
 const MAX_RECEIPT_BYTES = 1_000_000;
-const RECEIPT_FETCH_ATTEMPTS = 2;
+const RECEIPT_FETCH_ATTEMPTS = 3;
 
 type ReceiptFetchResult = {
   html: string;
@@ -330,6 +331,28 @@ async function fetchReceiptHtml(
 }
 
 async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
+  try {
+    return await fetchReceiptHtmlWithFetch(url);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Telebirr receipt validation timed out");
+    }
+    if (!isTransientReceiptFetchError(error)) {
+      throw normalizeReceiptFetchError(error);
+    }
+  }
+
+  try {
+    return await fetchReceiptHtmlWithHttps(url);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Telebirr receipt validation timed out");
+    }
+    throw normalizeReceiptFetchError(error);
+  }
+}
+
+async function fetchReceiptHtmlWithFetch(url: URL): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -340,10 +363,7 @@ async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
     const response = await fetch(url, {
       redirect: "manual",
       signal: controller.signal,
-      headers: {
-        "user-agent": "BingoCore/1.0 TelebirrReceiptValidator",
-        accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-      },
+      headers: receiptHeaders(),
     });
 
     if (response.status >= 300 && response.status < 400) {
@@ -363,17 +383,79 @@ async function fetchReceiptHtmlOnce(url: URL): Promise<string> {
       throw new Error("Telebirr receipt response is too large");
     }
     return html;
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error("Telebirr receipt validation timed out");
-    }
-    if (error instanceof Error) {
-      throw new Error(`Could not validate Telebirr receipt: ${error.message}`);
-    }
-    throw new Error("Could not validate Telebirr receipt");
   } finally {
     clearTimeout(timer);
   }
+}
+
+function fetchReceiptHtmlWithHttps(url: URL): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      url,
+      {
+        family: 4,
+        headers: receiptHeaders(),
+        method: "GET",
+        timeout: env.TELEBIRR_RECEIPT_TIMEOUT_MS,
+      },
+      (response) => {
+        const statusCode = response.statusCode ?? 0;
+        if (statusCode >= 300 && statusCode < 400) {
+          response.resume();
+          reject(new Error("Telebirr receipt URL redirected unexpectedly"));
+          return;
+        }
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          reject(new Error(`Telebirr receipt returned HTTP ${statusCode}`));
+          return;
+        }
+
+        const length = Number(response.headers["content-length"] ?? 0);
+        if (length > MAX_RECEIPT_BYTES) {
+          response.resume();
+          reject(new Error("Telebirr receipt response is too large"));
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_RECEIPT_BYTES) {
+            request.destroy(
+              new Error("Telebirr receipt response is too large"),
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          resolve(Buffer.concat(chunks).toString("utf8"));
+        });
+      },
+    );
+
+    request.on("timeout", () => {
+      request.destroy(new Error("Telebirr receipt validation timed out"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+function receiptHeaders(): Record<string, string> {
+  return {
+    "user-agent": "BingoCore/1.0 TelebirrReceiptValidator",
+    accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+  };
+}
+
+function normalizeReceiptFetchError(error: unknown): Error {
+  if (error instanceof Error) {
+    return new Error(`Could not validate Telebirr receipt: ${error.message}`);
+  }
+  return new Error("Could not validate Telebirr receipt");
 }
 
 function htmlToText(html: string): string {
