@@ -7,6 +7,118 @@ type TxClient = Omit<
   "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
 >;
 
+const NON_DEPOSIT_CREDIT_CLEAR_DESCRIPTION =
+  "Admin cleared non-deposit credits";
+
+type WalletTransactionForClearance = {
+  amount: number;
+  type: TransactionType | string;
+  description: string | null;
+  metadata: Prisma.JsonValue | null;
+};
+
+export type NonDepositCreditClearance = {
+  totalDepositCredits: number;
+  totalDebits: number;
+  depositBackedAvailable: number;
+  removable: number;
+};
+
+export function calculateNonDepositCreditClearance(
+  balance: number,
+  transactions: WalletTransactionForClearance[],
+): NonDepositCreditClearance {
+  const totalDepositCredits = transactions
+    .filter((transaction) => transaction.type === "DEPOSIT")
+    .filter((transaction) => transaction.amount > 0)
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const totalDebits = transactions
+    .filter((transaction) => transaction.amount < 0)
+    .filter((transaction) => !isNonDepositCreditClearance(transaction))
+    .reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
+  const depositBackedAvailable = Math.min(
+    balance,
+    Math.max(0, totalDepositCredits - totalDebits),
+  );
+
+  return {
+    totalDepositCredits,
+    totalDebits,
+    depositBackedAvailable,
+    removable: Math.max(0, balance - depositBackedAvailable),
+  };
+}
+
+export async function clearNonDepositCredits(
+  tx: TxClient,
+  input: {
+    userId: string;
+    actorId?: string | null;
+    reason?: string | null;
+    metadata?: Prisma.InputJsonObject;
+  },
+) {
+  const wallet = await tx.wallet.findUnique({
+    where: { userId: input.userId },
+  });
+  if (!wallet) throw new AppError("Wallet not found", 404);
+
+  const transactions = await tx.transaction.findMany({
+    where: { userId: input.userId },
+    select: {
+      amount: true,
+      type: true,
+      description: true,
+      metadata: true,
+    },
+  });
+  const clearance = calculateNonDepositCreditClearance(
+    wallet.balance,
+    transactions,
+  );
+
+  if (clearance.removable <= 0) {
+    return { ...clearance, removed: 0, wallet };
+  }
+
+  const updated = await tx.wallet.update({
+    where: { userId: input.userId },
+    data: { balance: { decrement: clearance.removable } },
+  });
+  const metadata = {
+    reason: input.reason ?? null,
+    totalDepositCredits: clearance.totalDepositCredits,
+    totalDebits: clearance.totalDebits,
+    depositBackedAvailable: clearance.depositBackedAvailable,
+    clearedNonDepositCredits: clearance.removable,
+    ...(input.metadata ?? {}),
+  } as Prisma.InputJsonObject;
+
+  await tx.transaction.create({
+    data: {
+      userId: input.userId,
+      amount: -clearance.removable,
+      type: "ADMIN_ADJUSTMENT",
+      balanceAfter: updated.balance,
+      description: input.reason ?? NON_DEPOSIT_CREDIT_CLEAR_DESCRIPTION,
+      metadata,
+    },
+  });
+
+  await logAudit(tx, {
+    actorId: input.actorId ?? undefined,
+    action: "NON_DEPOSIT_CREDITS_CLEARED",
+    target: userTarget(input.userId),
+    metadata: {
+      ...metadata,
+      balanceAfter: updated.balance,
+      lockedAfter: updated.locked,
+    },
+  });
+
+  return { ...clearance, removed: clearance.removable, wallet: updated };
+}
+
 export async function debitWallet(
   tx: TxClient,
   input: {
@@ -60,6 +172,21 @@ export async function debitWallet(
   });
 
   return updated;
+}
+
+function isNonDepositCreditClearance(
+  transaction: WalletTransactionForClearance,
+): boolean {
+  if (transaction.type !== "ADMIN_ADJUSTMENT" || transaction.amount >= 0)
+    return false;
+  if (transaction.description === NON_DEPOSIT_CREDIT_CLEAR_DESCRIPTION)
+    return true;
+  return Boolean(
+    transaction.metadata &&
+    typeof transaction.metadata === "object" &&
+    !Array.isArray(transaction.metadata) &&
+    "clearedNonDepositCredits" in transaction.metadata,
+  );
 }
 
 export async function creditWallet(

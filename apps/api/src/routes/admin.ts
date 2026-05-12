@@ -5,7 +5,11 @@ import { env } from "../config.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
 import { toWalletRequestDto } from "../game/dto.js";
 import { prisma } from "../prisma.js";
-import { creditWallet, debitWallet } from "../services/wallet.js";
+import {
+  clearNonDepositCredits,
+  creditWallet,
+  debitWallet,
+} from "../services/wallet.js";
 import {
   approveWalletRequest,
   rejectWalletRequest,
@@ -13,6 +17,10 @@ import {
 
 const creditBodySchema = z.object({
   amount: z.coerce.number().int(),
+  reason: z.string().max(200).optional(),
+});
+
+const clearCreditsBodySchema = z.object({
   reason: z.string().max(200).optional(),
 });
 
@@ -100,6 +108,31 @@ export async function registerAdminRoutes(
     });
 
     return { ok: true };
+  });
+
+  fastify.post("/api/admin/users/:id/clear-free-credits", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = clearCreditsBodySchema.parse(request.body ?? {});
+    const user = await prisma.user.findUnique({ where: { id: params.id } });
+    if (!user) throw new NotFoundError("User not found");
+
+    const result = await prisma.$transaction((tx) =>
+      clearNonDepositCredits(tx, {
+        userId: user.id,
+        reason: body.reason ?? "Admin cleared credits not backed by deposits",
+        metadata: { reason: body.reason ?? null } as Prisma.InputJsonObject,
+      }),
+    );
+
+    return {
+      ok: true,
+      removed: result.removed,
+      balance: result.wallet.balance,
+      locked: result.wallet.locked,
+      totalDepositCredits: result.totalDepositCredits,
+      totalDebits: result.totalDebits,
+      depositBackedAvailable: result.depositBackedAvailable,
+    };
   });
 
   fastify.get("/api/admin/wallet-requests", async (request) => {

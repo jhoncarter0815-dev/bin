@@ -11,7 +11,11 @@ import {
   tickRooms,
 } from "./game/roomManager.js";
 import { prisma } from "./prisma.js";
-import { creditWallet, debitWallet } from "./services/wallet.js";
+import {
+  clearNonDepositCredits,
+  creditWallet,
+  debitWallet,
+} from "./services/wallet.js";
 import {
   approveWalletRequest,
   createWalletRequest,
@@ -108,6 +112,16 @@ bot.command("credit", async (ctx) => {
 bot.command("debit", async (ctx) => {
   if (!(await requireAdminMessage(ctx))) return;
   await adjustUserCredits(ctx, "debit");
+});
+
+bot.command("clear_free_credits", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await clearUserNonDepositCredits(ctx);
+});
+
+bot.command("clear_non_deposit", async (ctx) => {
+  if (!(await requireAdminMessage(ctx))) return;
+  await clearUserNonDepositCredits(ctx);
 });
 
 bot.command("approve_wallet", async (ctx) => {
@@ -867,6 +881,7 @@ async function replyAdminHelp(ctx: Context): Promise<void> {
       "/kick_queue USER - remove a user from queue",
       "/credit USER AMOUNT reason - add credits",
       "/debit USER AMOUNT reason - remove credits",
+      "/clear_free_credits USER reason - remove available credits not backed by deposits",
       "/approve_wallet REQUEST_ID note - approve deposit/withdraw request",
       "/reject_wallet REQUEST_ID note - reject deposit/withdraw request",
       "/ban USER reason - ban user",
@@ -1155,6 +1170,49 @@ async function adjustUserCredits(
 
     await ctx.reply(
       `${direction === "credit" ? "Credited" : "Debited"} ${amount} credits for ${displayUser(user)}.\nBalance: ${wallet.balance}`,
+      adminMenuKeyboard(),
+    );
+  } catch (error) {
+    await ctx.reply(adminError(error), adminMenuKeyboard());
+  }
+}
+
+async function clearUserNonDepositCredits(ctx: Context): Promise<void> {
+  const [target, ...reasonParts] = commandArgs(ctx);
+  if (!target) {
+    await ctx.reply(
+      "Usage: /clear_free_credits USER reason",
+      adminMenuKeyboard(),
+    );
+    return;
+  }
+
+  const reason =
+    reasonParts.join(" ").trim() ||
+    "Admin cleared credits not backed by deposits";
+  try {
+    const user = await findUserByAdminTarget(target);
+    if (!user) throw new Error("User not found");
+    const actorId = await adminActorId(ctx);
+    const result = await prisma.$transaction((tx) =>
+      clearNonDepositCredits(tx, {
+        userId: user.id,
+        actorId,
+        reason,
+        metadata: adminMetadata(ctx),
+      }),
+    );
+
+    await ctx.reply(
+      [
+        result.removed > 0
+          ? `Cleared ${result.removed} non-deposit credits for ${displayUser(user)}.`
+          : `No non-deposit credits to clear for ${displayUser(user)}.`,
+        `Balance: ${result.wallet.balance}`,
+        `Deposit-backed available: ${result.depositBackedAvailable}`,
+        `Total deposits: ${result.totalDepositCredits}`,
+        `Total debits counted: ${result.totalDebits}`,
+      ].join("\n"),
       adminMenuKeyboard(),
     );
   } catch (error) {
