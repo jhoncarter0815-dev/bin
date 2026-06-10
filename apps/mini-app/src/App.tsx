@@ -4,17 +4,14 @@ import {
   ArrowUpFromLine,
   BadgeDollarSign,
   Bot,
-  Copy,
   Crown,
   Grid3X3,
   History,
   Home,
   LogOut,
   Play,
-  RefreshCcw,
   Share2,
   UserRound,
-  UsersRound,
   Wallet,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -39,7 +36,6 @@ import {
 import {
   authenticate,
   endpoints,
-  type AdminUserDto,
   type AuditEntryDto,
   type DepositInfoDto,
   type DepositRequestInput,
@@ -49,14 +45,7 @@ import {
 import { createBingoSocket, type BingoSocket } from "./socket";
 import { haptic, prepareTelegramShell } from "./telegram";
 
-type Page =
-  | "home"
-  | "play"
-  | "game"
-  | "wallet"
-  | "history"
-  | "profile"
-  | "admin";
+type Page = "home" | "play" | "game" | "wallet" | "history" | "profile";
 const AUTO_BINGO_KEY = "bingo_auto_bingo";
 const MANUAL_MARKS_KEY = "bingo_manual_marks";
 type ManualMarksByMatch = Record<string, number[]>;
@@ -95,7 +84,6 @@ export function App() {
     referralRewards: 0,
     referralLink: undefined,
   });
-  const [adminUsers, setAdminUsers] = useState<AdminUserDto[]>([]);
   const [winnerDialog, setWinnerDialog] = useState<MatchDto | null>(null);
   const [proofDialog, setProofDialog] = useState<ProofState | null>(null);
   const [seenWinnerMatchId, setSeenWinnerMatchId] = useState<string | null>(
@@ -278,11 +266,6 @@ export function App() {
     setProfile(nextProfile);
   }
 
-  async function refreshAdminUsers() {
-    if (!session?.isAdmin) return;
-    setAdminUsers(await endpoints.adminUsers());
-  }
-
   async function openPublicRoom() {
     await runAction(async () => {
       applyMatchmakingState(await endpoints.joinMatchmaking());
@@ -405,12 +388,6 @@ export function App() {
       }
       await navigator.clipboard.writeText(link);
     }, "Invite link ready");
-  }
-
-  async function copyAdminUsersCsv() {
-    await runAction(async () => {
-      await navigator.clipboard.writeText(adminUsersToCsv(adminUsers));
-    }, "User list copied");
   }
 
   async function submitWalletRequest(
@@ -592,18 +569,6 @@ export function App() {
             onInvite={shareReferral}
           />
         )}
-        {!loading && page === "admin" && session?.isAdmin && (
-          <AdminPage
-            users={adminUsers}
-            onRefresh={refreshAdminUsers}
-            onCopyCsv={copyAdminUsersCsv}
-          />
-        )}
-        {!loading && page === "admin" && !session?.isAdmin && (
-          <section className="stack">
-            <div className="empty-state">Admin access required.</div>
-          </section>
-        )}
       </main>
 
       {winnerDialog && (
@@ -631,7 +596,6 @@ export function App() {
             setPage(next);
             if (["wallet", "history", "profile"].includes(next))
               void refreshAccount();
-            if (next === "admin") void runAction(refreshAdminUsers);
           }
         }}
       />
@@ -1489,121 +1453,6 @@ function ProfilePage({
   );
 }
 
-function AdminPage({
-  users,
-  onRefresh,
-  onCopyCsv,
-}: {
-  users: AdminUserDto[];
-  onRefresh: () => void;
-  onCopyCsv: () => void;
-}) {
-  const [query, setQuery] = useState("");
-  const normalizedQuery = query.trim().toLowerCase();
-  const visibleUsers = useMemo(() => {
-    if (!normalizedQuery) return users;
-    return users.filter((user) =>
-      [
-        formatAdminUserName(user),
-        user.username ? `@${user.username}` : "",
-        user.telegramId,
-        user.phoneNumber ?? "",
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery),
-    );
-  }, [normalizedQuery, users]);
-  const phoneCount = users.filter((user) => Boolean(user.phoneNumber)).length;
-  const adminCount = users.filter((user) => user.isAdmin).length;
-
-  useEffect(() => {
-    void onRefresh();
-  }, []);
-
-  return (
-    <section className="stack admin-stack">
-      <div className="panel admin-panel">
-        <div className="admin-panel-head">
-          <div>
-            <p className="eyebrow">Admin</p>
-            <h2>User Directory</h2>
-            <span>{users.length} total accounts</span>
-          </div>
-          <UsersRound size={28} />
-        </div>
-        <div className="admin-actions">
-          <button className="secondary-action compact" onClick={onRefresh}>
-            <RefreshCcw size={17} />
-            Refresh
-          </button>
-          <button
-            className="primary-action compact"
-            disabled={users.length === 0}
-            onClick={onCopyCsv}
-          >
-            <Copy size={17} />
-            Copy CSV
-          </button>
-        </div>
-      </div>
-
-      <div className="compact-stats admin-stats">
-        <Metric label="Users" value={`${users.length}`} tone="cyan" />
-        <Metric label="Phones" value={`${phoneCount}`} tone="green" />
-        <Metric label="Admins" value={`${adminCount}`} tone="gold" />
-      </div>
-
-      <label className="field-label admin-search">
-        <span>Search users</span>
-        <input
-          placeholder="Name, @username, phone, Telegram ID"
-          value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-        />
-      </label>
-
-      <ListEmpty
-        items={visibleUsers}
-        text={users.length === 0 ? "No users found yet." : "No users match."}
-      />
-      <div className="admin-user-list">
-        {visibleUsers.map((user) => (
-          <div className="list-row admin-user-row" key={user.id}>
-            <div>
-              <strong>{formatAdminUserName(user)}</strong>
-              <small>
-                {user.username ? `@${user.username}` : "No username"} - TG{" "}
-                {user.telegramId}
-              </small>
-              <small>
-                {user.phoneNumber
-                  ? `Phone ${user.phoneNumber}`
-                  : "Phone not shared"}
-              </small>
-              <small>Joined {formatShortDate(user.createdAt)}</small>
-            </div>
-            <div className="admin-user-side">
-              <span>{user.wallet?.balance ?? 0} CR</span>
-              <b
-                className={`request-status ${
-                  user.phoneNumber ? "approved" : "pending"
-                }`}
-              >
-                {user.phoneNumber ? "PHONE" : "NO PHONE"}
-              </b>
-              {user.isAdmin && <b className="request-status approved">ADMIN</b>}
-              {user.isBanned && (
-                <b className="request-status rejected">BANNED</b>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function ListEmpty<T>({ items, text }: { items: T[]; text: string }) {
   if (items.length > 0) return null;
   return <div className="empty-state">{text}</div>;
@@ -1766,49 +1615,6 @@ function formatWalletRequestType(type: WalletRequestDto["type"]): string {
   return type === "DEPOSIT" ? "Deposit" : "Withdraw";
 }
 
-function formatAdminUserName(user: AdminUserDto): string {
-  const name = [user.firstName, user.lastName].filter(Boolean).join(" ");
-  return (
-    name || (user.username ? `@${user.username}` : `User ${user.telegramId}`)
-  );
-}
-
-function adminUsersToCsv(users: AdminUserDto[]): string {
-  const rows = users.map((user) => [
-    formatAdminUserName(user),
-    user.username ? `@${user.username}` : "",
-    user.telegramId,
-    user.phoneNumber ?? "",
-    user.phoneVerifiedAt ?? "",
-    String(user.wallet?.balance ?? 0),
-    String(user.wallet?.locked ?? 0),
-    user.isAdmin ? "yes" : "no",
-    user.isBanned ? "yes" : "no",
-    user.createdAt,
-  ]);
-  return [
-    [
-      "Name",
-      "Username",
-      "Telegram ID",
-      "Phone",
-      "Phone Verified At",
-      "Balance",
-      "Locked",
-      "Admin",
-      "Banned",
-      "Joined At",
-    ],
-    ...rows,
-  ]
-    .map((row) => row.map(csvCell).join(","))
-    .join("\n");
-}
-
-function csvCell(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
 function formatShortDate(value: string): string {
   return new Date(value).toLocaleString([], {
     month: "short",
@@ -1895,11 +1701,10 @@ function BottomNav({
     { page: "wallet", label: "Wallet", icon: Wallet },
     { page: "history", label: "Logs", icon: History },
     { page: "profile", label: "User", icon: UserRound },
-    { page: "admin", label: "Users", icon: UsersRound },
   ];
 
   return (
-    <nav className="bottom-nav admin-nav">
+    <nav className="bottom-nav">
       {items.map((item) => {
         const Icon = item.icon;
         return (

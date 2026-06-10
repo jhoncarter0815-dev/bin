@@ -21,20 +21,6 @@ export type Session = {
   isAdmin?: boolean;
 };
 
-export type AdminUserDto = {
-  id: string;
-  telegramId: string;
-  username?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
-  phoneNumber?: string | null;
-  phoneVerifiedAt?: string | null;
-  isAdmin: boolean;
-  isBanned: boolean;
-  wallet: WalletDto | null;
-  createdAt: string;
-};
-
 export type FairProofDto = {
   matchId: string;
   seedHash: string;
@@ -160,7 +146,6 @@ export const endpoints = {
       referralRewards: number;
       referralLink?: string;
     }>("/api/profile"),
-  adminUsers: () => api<AdminUserDto[]>("/api/admin/users"),
 };
 
 type ApiInit = Omit<RequestInit, "body"> & {

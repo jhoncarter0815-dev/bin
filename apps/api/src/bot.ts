@@ -308,19 +308,7 @@ bot.action("admin:rooms", async (ctx) => {
 bot.action("admin:users", async (ctx) => {
   if (!(await requireAdminCallback(ctx))) return;
   await ctx.answerCbQuery();
-
-  const users = await prisma.user.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 8,
-    include: { wallet: true },
-  });
-
-  await ctx.reply(
-    users.length
-      ? ["Recent users", ...users.map(formatUserLine)].join("\n")
-      : "No users yet.",
-    adminMenuKeyboard(),
-  );
+  await replyAdminUsers(ctx);
 });
 
 bot.action("admin:transactions", async (ctx) => {
@@ -963,6 +951,44 @@ async function replyAdminSettings(ctx: Context): Promise<void> {
     ].join("\n"),
     adminMenuKeyboard(),
   );
+}
+
+async function replyAdminUsers(ctx: Context): Promise<void> {
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: "desc" },
+    include: { wallet: true },
+  });
+
+  if (users.length === 0) {
+    await ctx.reply("No users yet.", adminMenuKeyboard());
+    return;
+  }
+
+  const phoneCount = users.filter((user) => Boolean(user.phoneNumber)).length;
+  const adminCount = users.filter((user) => user.isAdmin).length;
+  const bannedCount = users.filter((user) => user.isBanned).length;
+  const preview = users.slice(0, 10).map(formatAdminUserLine);
+
+  await ctx.reply(
+    [
+      "Users",
+      `Total: ${users.length}`,
+      `Phone numbers: ${phoneCount}`,
+      `Admins: ${adminCount}`,
+      `Banned: ${bannedCount}`,
+      "",
+      "Latest users",
+      ...preview,
+      "",
+      "Full list attached as CSV.",
+    ].join("\n"),
+    adminMenuKeyboard(),
+  );
+
+  await ctx.replyWithDocument({
+    source: Buffer.from(adminUsersToCsv(users), "utf8"),
+    filename: `bingo-users-${new Date().toISOString().slice(0, 10)}.csv`,
+  });
 }
 
 async function replyMatchmakingStatus(ctx: Context): Promise<void> {
@@ -1866,6 +1892,95 @@ function formatUserLine(user: {
   ].filter(Boolean);
   const phone = user.phoneNumber ? ` phone=*${user.phoneNumber.slice(-4)}` : "";
   return `${displayUser(user)} wallet=${user.wallet?.balance ?? 0} locked=${user.wallet?.locked ?? 0}${phone}${flags.length ? ` (${flags.join(", ")})` : ""}`;
+}
+
+function formatAdminUserLine(user: {
+  telegramId: bigint;
+  username: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phoneNumber: string | null;
+  isAdmin: boolean;
+  isBanned: boolean;
+  wallet: { balance: number; locked: number } | null;
+}): string {
+  const flags = [
+    user.isAdmin ? "admin" : "",
+    user.isBanned ? "banned" : "",
+  ].filter(Boolean);
+  return [
+    displayUser(user),
+    `tg=${user.telegramId.toString()}`,
+    `phone=${user.phoneNumber ?? "-"}`,
+    `wallet=${user.wallet?.balance ?? 0}`,
+    `locked=${user.wallet?.locked ?? 0}`,
+    flags.length ? `(${flags.join(", ")})` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function adminUsersToCsv(
+  users: Array<{
+    id: string;
+    telegramId: bigint;
+    username: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    phoneNumber: string | null;
+    phoneVerifiedAt: Date | null;
+    isAdmin: boolean;
+    isBanned: boolean;
+    referralCode: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    wallet: { balance: number; locked: number } | null;
+  }>,
+): string {
+  const rows = users.map((user) => [
+    user.id,
+    user.telegramId.toString(),
+    user.username ? `@${user.username}` : "",
+    user.firstName ?? "",
+    user.lastName ?? "",
+    displayUser(user),
+    user.phoneNumber ?? "",
+    user.phoneVerifiedAt?.toISOString() ?? "",
+    String(user.wallet?.balance ?? 0),
+    String(user.wallet?.locked ?? 0),
+    user.isAdmin ? "yes" : "no",
+    user.isBanned ? "yes" : "no",
+    user.referralCode ?? "",
+    user.createdAt.toISOString(),
+    user.updatedAt.toISOString(),
+  ]);
+
+  return [
+    [
+      "App User ID",
+      "Telegram ID",
+      "Username",
+      "First Name",
+      "Last Name",
+      "Display Name",
+      "Phone Number",
+      "Phone Verified At",
+      "Wallet Balance",
+      "Wallet Locked",
+      "Admin",
+      "Banned",
+      "Referral Code",
+      "Created At",
+      "Updated At",
+    ],
+    ...rows,
+  ]
+    .map((row) => row.map(csvCell).join(","))
+    .join("\n");
+}
+
+function csvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function formatTransactionLine(transaction: {

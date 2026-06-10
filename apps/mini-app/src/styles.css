@@ -995,81 +995,6 @@ button {
   padding: 0.85rem;
 }
 
-.admin-panel {
-  display: grid;
-  gap: 0.85rem;
-  padding: 0.95rem;
-}
-
-.admin-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
-}
-
-.admin-panel-head h2 {
-  margin: 0.18rem 0 0;
-  font-size: 1.3rem;
-  font-weight: 950;
-}
-
-.admin-panel-head span {
-  display: block;
-  margin-top: 0.22rem;
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 850;
-}
-
-.admin-panel-head svg {
-  flex: 0 0 auto;
-  color: var(--cyan);
-}
-
-.admin-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
-}
-
-.admin-actions .secondary-action.compact {
-  margin-top: 0;
-}
-
-.admin-search {
-  padding: 0.82rem;
-  border: 1px solid var(--line);
-  border-radius: 0.9rem;
-  background: var(--panel);
-}
-
-.admin-user-list {
-  display: grid;
-  gap: 0.65rem;
-}
-
-.admin-user-row {
-  align-items: flex-start;
-}
-
-.admin-user-row strong {
-  text-transform: none;
-}
-
-.admin-user-side {
-  display: grid;
-  justify-items: end;
-  gap: 0.22rem;
-  flex: 0 0 auto;
-}
-
-.admin-user-side span {
-  color: var(--green);
-  font-size: 0.82rem;
-  font-weight: 950;
-}
-
 .wallet-mode-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1708,10 +1633,6 @@ button {
   backdrop-filter: blur(18px);
 }
 
-.bottom-nav.admin-nav {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
 .bottom-nav button {
   display: grid;
   place-items: center;
@@ -1751,10 +1672,6 @@ button {
   .bottom-nav {
     justify-content: center;
     grid-template-columns: repeat(5, minmax(4.8rem, 6.2rem));
-  }
-
-  .bottom-nav.admin-nav {
-    grid-template-columns: repeat(6, minmax(4.2rem, 5.6rem));
   }
 }
 
