@@ -13,7 +13,6 @@ import {
   Play,
   RefreshCcw,
   Share2,
-  ShieldCheck,
   UserRound,
   UsersRound,
   Wallet,
@@ -626,7 +625,6 @@ export function App() {
 
       <BottomNav
         page={page}
-        isAdmin={Boolean(session?.isAdmin)}
         setPage={(next) => {
           if (next === "play") void openPublicRoom();
           else {
@@ -1886,11 +1884,9 @@ function validManualMarksForMatch(match: MatchDto, values: number[]): number[] {
 
 function BottomNav({
   page,
-  isAdmin,
   setPage,
 }: {
   page: Page;
-  isAdmin: boolean;
   setPage: (page: Page) => void;
 }) {
   const items: Array<{ page: Page; label: string; icon: typeof Home }> = [
@@ -1899,13 +1895,11 @@ function BottomNav({
     { page: "wallet", label: "Wallet", icon: Wallet },
     { page: "history", label: "Logs", icon: History },
     { page: "profile", label: "User", icon: UserRound },
+    { page: "admin", label: "Users", icon: UsersRound },
   ];
-  if (isAdmin) {
-    items.push({ page: "admin", label: "Admin", icon: ShieldCheck });
-  }
 
   return (
-    <nav className={`bottom-nav ${isAdmin ? "admin-nav" : ""}`}>
+    <nav className="bottom-nav admin-nav">
       {items.map((item) => {
         const Icon = item.icon;
         return (
