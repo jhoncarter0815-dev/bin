@@ -5,6 +5,7 @@ import {
   getTelegramStartParam,
   verifyTelegramInitData,
 } from "../auth/telegram.js";
+import { isConfiguredAdminTelegramId } from "../config.js";
 import { signAuthToken } from "../auth/jwt.js";
 import { toPublicUser, toWalletDto } from "../game/dto.js";
 import { prisma } from "../prisma.js";
@@ -37,11 +38,13 @@ export async function registerAuthRoutes(
         ? getTelegramStartParam(body.initData)
         : body.devUser?.referralCode);
     const user = await upsertTelegramUser(telegramUser, referralCode);
+    const isAdmin =
+      user.isAdmin || isConfiguredAdminTelegramId(user.telegramId);
     const token = signAuthToken({
       sub: user.id,
       telegramId: user.telegramId.toString(),
       username: user.username,
-      isAdmin: user.isAdmin,
+      isAdmin,
     });
 
     return {
@@ -50,6 +53,7 @@ export async function registerAuthRoutes(
       wallet: user.wallet
         ? toWalletDto(user.wallet)
         : { balance: 0, locked: 0 },
+      isAdmin,
     };
   });
 
@@ -66,7 +70,7 @@ export async function registerAuthRoutes(
         wallet: user.wallet
           ? toWalletDto(user.wallet)
           : { balance: 0, locked: 0 },
-        isAdmin: user.isAdmin,
+        isAdmin: user.isAdmin || isConfiguredAdminTelegramId(user.telegramId),
       };
     },
   );

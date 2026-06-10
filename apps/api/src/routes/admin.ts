@@ -36,14 +36,19 @@ const walletRequestActionBodySchema = z.object({
 export async function registerAdminRoutes(
   fastify: FastifyInstance,
 ): Promise<void> {
-  fastify.addHook("preHandler", async (request) => {
-    if (request.url.startsWith("/api/admin")) assertAdminSecret(request);
+  fastify.addHook("preHandler", async (request, reply) => {
+    if (!request.url.startsWith("/api/admin")) return;
+    if (hasAdminSecret(request)) return;
+
+    await fastify.authenticate(request, reply);
+    if (reply.sent) return;
+    if (!request.user?.isAdmin)
+      throw new ForbiddenError("Admin access required");
   });
 
   fastify.get("/api/admin/users", async () => {
     const users = await prisma.user.findMany({
       orderBy: { createdAt: "desc" },
-      take: 200,
       include: { wallet: true },
     });
 
@@ -221,8 +226,7 @@ export async function registerAdminRoutes(
   });
 }
 
-function assertAdminSecret(request: FastifyRequest): void {
+function hasAdminSecret(request: FastifyRequest): boolean {
   const secret = request.headers["x-admin-secret"];
-  if (secret !== env.ADMIN_SECRET)
-    throw new ForbiddenError("Invalid admin secret");
+  return secret === env.ADMIN_SECRET;
 }
